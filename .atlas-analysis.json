@@ -1,0 +1,91 @@
+{
+  "projectType": "saas",
+  "projectName": "FlushLa",
+  "projectDescription": "AI-powered toilet cleanliness monitoring system with gamified user engagement and real-time inspection capabilities.",
+  "theme": "mint",
+  "primaryColor": "#667eea",
+  "lightColor": "#a0aff4",
+  "darkColor": "#764ba2",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart", "features"]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": ["concepts/cleanliness-scoring", "concepts/user-tiers", "concepts/workflow"]
+          },
+          {
+            "group": "User Guides",
+            "pages": ["guides/user-registration", "guides/toilet-inspection", "guides/qr-scanner", "guides/nearby-toilets"]
+          },
+          {
+            "group": "Vision AI",
+            "pages": ["vision/overview", "vision/providers", "vision/detection-rules", "vision/scoring-rubric"]
+          },
+          {
+            "group": "Integrations",
+            "pages": ["integrations/supabase", "integrations/passcreator", "integrations/google-maps"]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Endpoints",
+            "pages": ["api/overview", "api/authentication"]
+          },
+          {
+            "group": "Inspection Workflow",
+            "pages": ["api/start-inspection", "api/upload-photo", "api/workflow-status"]
+          },
+          {
+            "group": "User Management",
+            "pages": ["api/register", "api/login", "api/user-profile"]
+          },
+          {
+            "group": "Toilet Management",
+            "pages": ["api/nearby-toilets", "api/toilet-details"]
+          },
+          {
+            "group": "WebSocket",
+            "pages": ["api/camera-websocket"]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "AI-powered toilet cleanliness analysis using OpenAI GPT-4 Vision, Google Cloud Vision, or Vertex AI",
+    "Real-time image capture and inspection workflow with WebSocket camera integration",
+    "Gamified scoring system with Bronze, Silver, and Gold user tiers",
+    "Apple Wallet integration for digital passes with live score updates",
+    "QR code scanner for quick toilet access and inspection",
+    "Interactive maps showing nearby toilets with cleanliness ratings",
+    "Automated bounding box detection for hygiene issues",
+    "User authentication and profile management"
+  ],
+  "publicApiSurface": [
+    "POST /api/start-toilet-inspection",
+    "POST /upload-photo",
+    "GET /api/workflow-status/{session_id}",
+    "POST /register",
+    "POST /login",
+    "POST /logout",
+    "GET /user",
+    "GET /nearby-toilets",
+    "GET /qr-access-scanner",
+    "GET /scoring-guide",
+    "WebSocket /ws/camera",
+    "analyze_toilet_image()",
+    "draw_boxes()",
+    "calculate_score_delta()",
+    "get_user_tier()",
+    "update_user_score()"
+  ]
+}
