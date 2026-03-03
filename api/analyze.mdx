@@ -1,0 +1,187 @@
+---
+title: Analyze Image
+description: POST /analyze - Standalone toilet image analysis endpoint
+---
+
+## Endpoint
+
+```
+POST /analyze
+```
+
+**Location**: `app/main.py:1001`
+
+## Overview
+
+Direct endpoint for analyzing toilet images without the full workflow orchestration. Useful for testing or custom integrations.
+
+<Note>
+For the complete inspection workflow with camera capture, use [Start Inspection](/api/start-inspection) instead.
+</Note>
+
+## Request
+
+### Multipart Form Data
+
+<ParamField body="file" type="file" required>
+  Image file to analyze (JPEG, PNG)
+</ParamField>
+
+<ParamField body="user_id" type="string">
+  Optional user ID to associate with the analysis. Defaults to `"example_user_id"` if not provided.
+</ParamField>
+
+<ParamField body="toilet_id" type="integer" default={1}>
+  Toilet being inspected
+</ParamField>
+
+## Response
+
+<ResponseField name="analysis" type="object">
+  AI vision analysis result with detections and scores
+</ResponseField>
+
+<ResponseField name="analysis.cleanliness_score" type="integer">
+  Overall cleanliness score (0-100)
+</ResponseField>
+
+<ResponseField name="analysis.issues" type="array">
+  List of unique issue types detected (e.g., `["wet_seat", "trash_on_floor"]`)
+</ResponseField>
+
+<ResponseField name="analysis.detections" type="array">
+  Array of detected issues with bounding boxes
+</ResponseField>
+
+<ResponseField name="analysis.confidence" type="number">
+  Average confidence across all detections (0-1)
+</ResponseField>
+
+<ResponseField name="annotated_image_base64" type="string">
+  Base64-encoded image with bounding boxes drawn around detected issues
+</ResponseField>
+
+<ResponseField name="score_delta" type="integer">
+  Points added/subtracted from user score based on cleanliness
+</ResponseField>
+
+<ResponseField name="image_url" type="string">
+  Public URL of the annotated image uploaded to Supabase Storage
+</ResponseField>
+
+## Example Request
+
+```bash
+curl -X POST http://localhost:8000/analyze \
+  -F "file=@toilet_photo.jpg" \
+  -F "user_id=550e8400-e29b-41d4-a716-446655440000" \
+  -F "toilet_id=1"
+```
+
+## Example Response
+
+```json
+{
+  "analysis": {
+    "cleanliness_score": 85,
+    "issues": ["toilet_paper_floor"],
+    "detections": [
+      {
+        "bbox": [120, 450, 180, 480],
+        "issue": "toilet_paper_floor",
+        "confidence": 0.92
+      }
+    ],
+    "confidence": 0.92
+  },
+  "annotated_image_base64": "/9j/4AAQSkZJRgABAQAA...",
+  "score_delta": 0,
+  "image_url": "https://xxx.supabase.co/storage/v1/object/public/uploads/toilet_analysis_user123_20260303_143022.jpg"
+}
+```
+
+## Processing Flow
+
+1. **Validate image** - Ensures file is an image type
+2. **AI analysis** - Calls `analyze_toilet_image()` with configured provider (OpenAI/Vertex AI/Cloud Vision)
+3. **Draw annotations** - Uses `draw_boxes()` to create annotated image
+4. **Calculate score delta** - Determines points impact using `calculate_score_delta()`
+5. **Upload to storage** - Stores annotated image in Supabase Storage
+6. **Record visit** - Saves analysis to `toilet_visits` table
+7. **Update user score** - Asynchronously updates user's total score via background task
+
+## Implementation
+
+**Location**: `app/main.py:1001-1045`
+
+```python
+@app.post("/analyze")
+async def analyze(
+    file: UploadFile, 
+    background_tasks: BackgroundTasks, 
+    user_id: str = None, 
+    toilet_id: int = 1
+):
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Invalid image")
+    
+    image_bytes = await file.read()
+
+    # AI analysis
+    analysis = analyze_toilet_image(image_bytes)
+    annotated_bytes = draw_boxes(image_bytes, analysis.get("detections", []))
+
+    # Calculate score delta
+    cleanliness_score = analysis.get("cleanliness_score", 100)
+    score_delta = calculate_score_delta(cleanliness_score)
+
+    # Upload annotated image
+    actual_user_id = user_id or "example_user_id"
+    timestamp = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d_%H%M%S")
+    filename = f"toilet_analysis_{actual_user_id}_{timestamp}.jpg"
+    
+    image_url = None
+    try:
+        image_url = await upload_image_to_supabase(annotated_bytes, filename)
+    except Exception as e:
+        print(f"Failed to upload image: {str(e)}")
+
+    # Store in database
+    supabase.table("toilet_visits").insert({
+        "user_id": actual_user_id,
+        "toilet_id": toilet_id,
+        "ai_result": analysis,
+        "cleanliness_score": cleanliness_score,
+        "score_delta": score_delta,
+        "image_url": image_url,
+        "created_at": datetime.now(timezone(timedelta(hours=8))).isoformat()
+    }).execute()
+
+    # Update user score in background
+    background_tasks.add_task(update_user_score, actual_user_id)
+
+    return {
+        "analysis": analysis,
+        "annotated_image_base64": base64.b64encode(annotated_bytes).decode(),
+        "score_delta": score_delta,
+        "image_url": image_url
+    }
+```
+
+## Error Responses
+
+<ResponseField name="400 Bad Request" type="error">
+  Returned when uploaded file is not an image
+</ResponseField>
+
+```json
+{
+  "detail": "Invalid image"
+}
+```
+
+## Related Endpoints
+
+- [Start Inspection](/api/start-inspection) - Full workflow with camera orchestration
+- [Upload Photo](/api/upload-photo) - Upload within an existing workflow session
+- [Vision AI Overview](/vision/overview) - Details on AI analysis system

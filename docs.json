@@ -54,7 +54,7 @@
           },
           {
             "group": "Inspection Workflow",
-            "pages": ["api/start-inspection", "api/upload-photo", "api/workflow-status"]
+            "pages": ["api/start-inspection", "api/upload-photo", "api/workflow-status", "api/analyze"]
           },
           {
             "group": "User Management",

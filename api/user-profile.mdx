@@ -1,23 +1,23 @@
 ---
 title: User Profile
-description: GET /user - Get the current authenticated user's profile and activity
+description: GET / - Get the current authenticated user's profile and activity
 ---
 
 ## Endpoint
 
 ```
-GET /user
+GET /
 ```
 
 <Note>
-This is a web route that returns an HTML page, not a JSON API endpoint. For API access to user data, use the `get_current_user()` function.
+This is the home route that returns an HTML page, not a JSON API endpoint. For API access to user data, use the `get_current_user()` function.
 </Note>
 
 ## Overview
 
 Returns the authenticated user's profile page with their recent toilet inspection history.
 
-**Location**: `app/main.py:537` (Home route)
+**Location**: `app/main.py:537`
 
 ## Authentication
 
