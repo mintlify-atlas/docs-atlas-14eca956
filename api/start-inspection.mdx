@@ -1,0 +1,130 @@
+---
+title: Start Toilet Inspection
+description: POST /api/start-toilet-inspection - Initiate a complete toilet inspection workflow
+---
+
+## Endpoint
+
+```
+POST /api/start-toilet-inspection
+```
+
+## Overview
+
+Orchestrates the complete toilet inspection workflow:
+
+1. Creates a workflow session
+2. Sends session ID to connected camera clients
+3. Triggers camera capture
+4. Waits for photo upload
+5. Automatically analyzes the image
+6. Returns the complete analysis result
+
+**Location**: `app/main.py:358`
+
+## Request Body
+
+<ParamField body="user_id" type="string" required>
+  The ID of the user performing the inspection
+</ParamField>
+
+<ParamField body="toilet_id" type="integer" default={1}>
+  The ID of the toilet being inspected
+</ParamField>
+
+### Request Schema
+
+```python
+class StartInspectionRequest(BaseModel):
+    user_id: str
+    toilet_id: int = 1
+```
+
+## Response
+
+<ResponseField name="status" type="string">
+  Always returns `"inspection_started"`
+</ResponseField>
+
+<ResponseField name="session_id" type="string">
+  Unique UUID for this inspection workflow session
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Human-readable status message
+</ResponseField>
+
+<ResponseField name="next_step" type="string">
+  Instructions for the next step in the workflow
+</ResponseField>
+
+<ResponseField name="connected_cameras" type="integer">
+  Number of camera clients currently connected via WebSocket
+</ResponseField>
+
+## Example Request
+
+```bash
+curl -X POST http://localhost:8000/api/start-toilet-inspection \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "550e8400-e29b-41d4-a716-446655440000",
+    "toilet_id": 1
+  }'
+```
+
+## Example Response
+
+```json
+{
+  "status": "inspection_started",
+  "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "message": "Camera capture triggered. Please take a photo and upload it.",
+  "next_step": "Upload photo to /upload-photo with session_id=7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "connected_cameras": 1
+}
+```
+
+## Workflow Session States
+
+Once created, the workflow session progresses through these states:
+
+| State | Description |
+|-------|-------------|
+| `waiting_for_capture` | Initial state, waiting for camera to capture photo |
+| `capture_triggered` | Camera has been signaled to capture |
+| `analyzing` | Photo received, AI analysis in progress |
+| `completed` | Analysis complete, results available |
+| `error` | An error occurred during the workflow |
+
+## WebSocket Integration
+
+This endpoint sends two messages to all connected camera clients via WebSocket:
+
+1. `SESSION:{session_id}` - Informs the camera of the session ID
+2. `CAPTURE` - Triggers the camera to take a photo
+
+The camera client should:
+1. Store the session ID
+2. Capture an image
+3. Upload it to `/upload-photo` with the session ID
+
+## Next Steps
+
+After starting an inspection:
+
+1. Camera captures photo automatically (if connected)
+2. Photo is uploaded to [/upload-photo](/api/upload-photo) with the `session_id`
+3. Check workflow status at [/api/workflow-status/{session_id}](/api/workflow-status)
+
+## Error Handling
+
+<Warning>
+If `connected_cameras` is `0`, no camera clients are connected. The inspection can still proceed if photos are uploaded manually.
+</Warning>
+
+## Related Endpoints
+
+- [Upload Photo](/api/upload-photo) - Upload captured photo for analysis
+- [Workflow Status](/api/workflow-status) - Check inspection status
+- [Camera WebSocket](/api/camera-websocket) - WebSocket connection for cameras

@@ -1,0 +1,262 @@
+---
+title: Toilet Details
+description: Access control and tier-based authentication for toilets
+---
+
+## Overview
+
+FlushLa implements a tier-based access control system where users must maintain a certain cleanliness score to access higher-tier toilets.
+
+## Toilet Tiers
+
+| Tier | Name | Description | Required User Score |
+|------|------|-------------|---------------------|
+| 1 | Bronze Standard | Basic public toilets | No restriction (score 0-49) |
+| 2 | Silver Standard | Well-maintained facilities | User score ≥ 50 |
+| 3 | Gold Standard | Premium, luxury toilets | User score ≥ 80 |
+
+## Access Verification Endpoint
+
+```
+POST /api/verify-access
+```
+
+**Location**: `app/main.py:911`
+
+Verifies whether a user has sufficient tier to access a specific toilet.
+
+### Request Body
+
+<ParamField body="qr_code_data" type="string" required>
+  The pass identifier scanned from the user's digital wallet
+</ParamField>
+
+<ParamField body="toilet_id" type="integer" default={1}>
+  ID of the toilet being accessed
+</ParamField>
+
+### Response (Access Granted)
+
+<ResponseField name="access" type="string">
+  `"granted"` when user has sufficient tier
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  User information including tier and score
+</ResponseField>
+
+<ResponseField name="user.id" type="string">
+  User's UUID
+</ResponseField>
+
+<ResponseField name="user.username" type="string">
+  User's display name
+</ResponseField>
+
+<ResponseField name="user.email" type="string">
+  User's email address
+</ResponseField>
+
+<ResponseField name="user.score" type="integer">
+  Current cleanliness score (0-100)
+</ResponseField>
+
+<ResponseField name="user.tier" type="integer">
+  User's tier level (1-3)
+</ResponseField>
+
+<ResponseField name="user.tier_name" type="string">
+  Human-readable tier name
+</ResponseField>
+
+<ResponseField name="toilet" type="object">
+  Toilet information
+</ResponseField>
+
+<ResponseField name="toilet.id" type="integer">
+  Toilet ID
+</ResponseField>
+
+<ResponseField name="toilet.name" type="string">
+  Toilet name/location
+</ResponseField>
+
+<ResponseField name="toilet.tier" type="integer">
+  Required tier for access (1-3)
+</ResponseField>
+
+<ResponseField name="toilet.tier_name" type="string">
+  Tier name (Bronze/Silver/Gold Standard)
+</ResponseField>
+
+### Response (Access Denied)
+
+<ResponseField name="access" type="string">
+  `"denied"` when access is not allowed
+</ResponseField>
+
+<ResponseField name="reason" type="string">
+  Human-readable denial reason
+</ResponseField>
+
+<ResponseField name="user_tier" type="integer">
+  User's current tier
+</ResponseField>
+
+<ResponseField name="user_tier_name" type="string">
+  User's tier name
+</ResponseField>
+
+<ResponseField name="required_tier" type="integer">
+  Tier required to access this toilet
+</ResponseField>
+
+<ResponseField name="required_tier_name" type="string">
+  Required tier name
+</ResponseField>
+
+<ResponseField name="user_score" type="integer">
+  User's current score
+</ResponseField>
+
+<ResponseField name="points_needed" type="integer">
+  Points needed to reach required tier
+</ResponseField>
+
+## Example Requests
+
+### Access Granted
+
+```bash
+curl -X POST http://localhost:8000/api/verify-access \
+  -H "Content-Type: application/json" \
+  -d '{
+    "qr_code_data": "passkey_abc123def456",
+    "toilet_id": 2
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "access": "granted",
+  "user": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "username": "John Doe",
+    "email": "john@example.com",
+    "score": 75,
+    "tier": 2,
+    "tier_name": "Silver Standard"
+  },
+  "toilet": {
+    "id": 2,
+    "name": "Plaza Shopping Mall - Level 2",
+    "tier": 2,
+    "tier_name": "Silver Standard"
+  }
+}
+```
+
+### Access Denied
+
+```bash
+curl -X POST http://localhost:8000/api/verify-access \
+  -H "Content-Type: application/json" \
+  -d '{
+    "qr_code_data": "passkey_xyz789",
+    "toilet_id": 3
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "access": "denied",
+  "reason": "Insufficient tier. This is a Gold Standard toilet. You need 1 more tier level(s).",
+  "user_tier": 2,
+  "user_tier_name": "Silver Standard",
+  "required_tier": 3,
+  "required_tier_name": "Gold Standard",
+  "user_score": 65,
+  "points_needed": 15
+}
+```
+
+## Tier Calculation Logic
+
+**Location**: `app/main.py:241`
+
+```python
+def get_user_tier(score: int) -> int:
+    """Calculate user tier based on score
+    Returns: 1 (Bronze), 2 (Silver), or 3 (Gold)
+    """
+    if score >= 80:
+        return 3  # Gold
+    elif score >= 50:
+        return 2  # Silver
+    else:
+        return 1  # Bronze
+```
+
+```python
+def get_tier_name(tier: int) -> str:
+    """Get tier name from tier number"""
+    tier_names = {
+        1: "Bronze Standard",
+        2: "Silver Standard",
+        3: "Gold Standard"
+    }
+    return tier_names.get(tier, "Unknown")
+```
+
+## Access Workflow
+
+1. **User arrives at toilet** with their digital pass (Apple Wallet / Google Pay)
+2. **Toilet scanner** reads QR code from pass
+3. **Scanner sends** `qr_code_data` and `toilet_id` to `/api/verify-access`
+4. **System validates**:
+   - Pass exists in database
+   - User profile is found
+   - Toilet exists
+   - User tier ≥ toilet tier
+5. **Access granted** if all checks pass
+6. **User is logged in** automatically via session
+7. **User can proceed** to use the toilet
+
+## Improving Your Tier
+
+Users can increase their tier by:
+
+1. Performing toilet inspections via [Start Inspection](/api/start-inspection)
+2. Keeping toilets clean (score ≥ 90 for bonus points)
+3. Accumulating positive score deltas
+
+### Score Requirements
+
+- **Bronze → Silver**: Reach 50 points
+- **Silver → Gold**: Reach 80 points
+
+## Toilet Database Schema
+
+Toilets are stored in the `toilets` table:
+
+```sql
+CREATE TABLE toilets (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  location TEXT,
+  current_tier INTEGER DEFAULT 1,
+  last_cleanliness_score INTEGER,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+## Related Endpoints
+
+- [Nearby Toilets](/api/nearby-toilets) - Browse available toilets
+- [User Profile](/api/user-profile) - Check your current tier and score
+- [Authentication](/api/authentication) - QR code authentication details

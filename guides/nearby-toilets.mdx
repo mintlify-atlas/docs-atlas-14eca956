@@ -1,0 +1,459 @@
+---
+title: Finding Nearby Toilets
+description: Discover and explore toilet facilities with cleanliness ratings
+---
+
+## Overview
+
+The Nearby Toilets feature helps you find available toilet facilities, view their cleanliness ratings, check access requirements, and plan your visits based on your tier level.
+
+## Accessing the Page
+
+Navigate to `/nearby-toilets` from:
+- Your user dashboard navigation menu
+- Direct URL access
+
+<Note>
+  You must be logged in to access this page. Unauthenticated users are redirected to `/login`.
+</Note>
+
+## Page Features
+
+### Toilet Grid View
+
+The page displays all available toilets in a responsive grid:
+
+```html
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+  <!-- Toilet cards -->
+</div>
+```
+
+- **Mobile**: Single column
+- **Tablet**: 2 columns
+- **Desktop**: 3 columns
+
+### Toilet Card Information
+
+Each card displays:
+
+<Steps>
+  <Step title="Toilet Image">
+    - Latest inspection photo (if available)
+    - Placeholder toilet emoji if no recent inspections
+    - 48-pixel height with gradient background
+  </Step>
+
+  <Step title="Tier Badge">
+    Located in top-right corner showing:
+    - **Gold Tier (3)**: Yellow badge with star icon
+    - **Silver Tier (2)**: Gray badge with star icon
+    - **Bronze Tier (1)**: Orange badge with star icon
+  </Step>
+
+  <Step title="Cleanliness Score">
+    Bottom-left overlay displaying:
+    - Large score number (0-100)
+    - Color-coded by cleanliness:
+      - **90-100**: Green (Excellent)
+      - **70-89**: Yellow (Good)
+      - **50-69**: Orange (Fair)
+      - **0-49**: Red (Poor)
+  </Step>
+
+  <Step title="Toilet Details">
+    Card body includes:
+    - **Name**: Toilet facility name
+    - **Location**: Address or building location
+    - **Last Inspection**: Date of most recent inspection
+  </Step>
+
+  <Step title="Access Controls">
+    Action buttons based on your tier:
+    - **Inspect Button**: If you have access
+    - **Locked Button**: If tier requirement not met
+    - **Info Button**: Additional details
+  </Step>
+</Steps>
+
+## Filtering Toilets
+
+Use the filter bar to view specific tiers:
+
+```javascript
+function filterTier(tier) {
+  const cards = document.querySelectorAll('.toilet-card');
+  cards.forEach(card => {
+    const cardTier = parseInt(card.dataset.tier);
+    if (tier === 'all' || cardTier === tier) {
+      card.style.display = 'block';
+    } else {
+      card.style.display = 'none';
+    }
+  });
+}
+```
+
+### Filter Options
+
+<Tabs>
+  <Tab title="All">
+    Display all toilets regardless of tier.
+  </Tab>
+  <Tab title="Gold Tier">
+    Show only Tier 3 (Gold Standard) facilities.
+  </Tab>
+  <Tab title="Silver Tier">
+    Show only Tier 2 (Silver Standard) facilities.
+  </Tab>
+  <Tab title="Bronze Tier">
+    Show only Tier 1 (Bronze Standard) facilities.
+  </Tab>
+</Tabs>
+
+<Info>
+  The active filter is highlighted in blue, while inactive filters are gray.
+</Info>
+
+## Viewing Cleanliness Ratings
+
+### How Ratings Are Calculated
+
+The backend (main.py:591) fetches toilet data with latest inspections:
+
+```python
+# Fetch all toilets
+toilets_res = supabase
+  .table("toilets")
+  .select("*")
+  .order("name")
+  .execute()
+
+# For each toilet, get latest inspection
+for toilet in toilets:
+    latest_visit_res = supabase
+      .table("toilet_visits")
+      .select("cleanliness_score, created_at, image_url")
+      .eq("toilet_id", toilet["id"])
+      .order("created_at", desc=True)
+      .limit(1)
+      .execute()
+    
+    toilet["latest_inspection"] = latest_visit_res.data[0] if latest_visit_res.data else None
+```
+
+### Rating Display
+
+- **Score Badge**: Large number in bottom-left of card
+- **Color Coding**: Visual indicator of cleanliness level
+- **Last Inspected**: Timestamp of most recent inspection
+- **No Inspections**: Gray text indicating no recent data
+
+<CardGroup cols={4}>
+  <Card title="90-100" color="#10b981">
+    Excellent - Very clean
+  </Card>
+  <Card title="70-89" color="#eab308">
+    Good - Generally clean
+  </Card>
+  <Card title="50-69" color="#f97316">
+    Fair - Needs attention
+  </Card>
+  <Card title="0-49" color="#ef4444">
+    Poor - Requires cleaning
+  </Card>
+</CardGroup>
+
+## Access Requirements
+
+Your access to each toilet is determined by tier comparison:
+
+```jinja
+{% set user_tier = 3 if user.score >= 80 else (2 if user.score >= 50 else 1) %}
+{% set can_access = user_tier >= toilet.current_tier %}
+```
+
+### Access Granted (Green Inspect Button)
+
+When `user_tier >= toilet.current_tier`:
+
+```html
+<a href="/guides/qr-scanner" 
+   class="flex-1 bg-gradient-to-r from-blue-600 to-blue-700 text-white...">
+  <i class="fas fa-qrcode mr-2"></i>Inspect
+</a>
+```
+
+Clicking this button:
+1. Opens the QR scanner
+2. Allows you to scan your pass and begin inspection
+
+### Access Denied (Gray Locked Button)
+
+When `user_tier < toilet.current_tier`:
+
+```html
+<button disabled class="flex-1 bg-gray-300 text-gray-500...">
+  <i class="fas fa-lock mr-2"></i>Locked
+  <!-- Tooltip showing tier requirement -->
+</button>
+```
+
+Hover to see:
+- Required tier level
+- Your current tier level
+- Points needed to unlock
+
+<Warning>
+  You cannot access higher-tier facilities until you improve your score through successful inspections.
+</Warning>
+
+## Map Integration
+
+The page includes a placeholder for future map functionality:
+
+```html
+<div class="mt-12 bg-white rounded-xl shadow-lg p-8">
+  <h2>Map View</h2>
+  <span class="text-sm text-gray-500">Coming Soon</span>
+  
+  <div class="bg-gradient-to-br from-blue-50 to-purple-50 rounded-lg h-64">
+    <div class="text-center">
+      <div class="text-5xl mb-4">🗺️</div>
+      <p>Interactive map coming soon</p>
+      <p class="text-sm">View all toilets on a map with real-time status</p>
+    </div>
+  </div>
+</div>
+```
+
+### Planned Map Features
+
+<CardGroup cols={2}>
+  <Card title="Location Pins" icon="map-pin">
+    Visual markers for each toilet on an interactive map
+  </Card>
+  
+  <Card title="Real-time Status" icon="circle-dot">
+    Live cleanliness scores and availability
+  </Card>
+  
+  <Card title="Distance Calculation" icon="ruler">
+    Show distance from your current location
+  </Card>
+  
+  <Card title="Route Navigation" icon="route">
+    Directions to selected facility
+  </Card>
+</CardGroup>
+
+## Quick Statistics
+
+The bottom of the page displays summary cards:
+
+```html
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+  <div>Total Showing: {{ toilets|length }}</div>
+  <div>Gold Tier: {{ toilets|selectattr('current_tier', 'equalto', 3)|list|length }}</div>
+  <div>Silver Tier: {{ toilets|selectattr('current_tier', 'equalto', 2)|list|length }}</div>
+  <div>Bronze Tier: {{ toilets|selectattr('current_tier', 'equalto', 1)|list|length }}</div>
+</div>
+```
+
+These update dynamically when filters are applied.
+
+## Backend Implementation
+
+The `/nearby-toilets` endpoint (main.py:591):
+
+<Steps>
+  <Step title="Authentication Check">
+    ```python
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    ```
+  </Step>
+
+  <Step title="Fetch Toilets">
+    ```python
+    toilets_res = supabase
+      .table("toilets")
+      .select("*")
+      .order("name")
+      .execute()
+    toilets = toilets_res.data or []
+    ```
+  </Step>
+
+  <Step title="Enrich with Inspections">
+    For each toilet, fetch the latest visit:
+    ```python
+    latest_visit_res = supabase
+      .table("toilet_visits")
+      .select("cleanliness_score, created_at, image_url")
+      .eq("toilet_id", toilet["id"])
+      .order("created_at", desc=True)
+      .limit(1)
+      .execute()
+    ```
+  </Step>
+
+  <Step title="Render Template">
+    ```python
+    return templates.TemplateResponse(
+        "user/nearby_toilets.html",
+        {"request": request, "user": user, "toilets": toilets}
+    )
+    ```
+  </Step>
+</Steps>
+
+## Database Schema
+
+### Toilets Table
+
+```sql
+CREATE TABLE toilets (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  location TEXT,
+  current_tier INTEGER DEFAULT 1,
+  last_cleanliness_score INTEGER
+);
+```
+
+### Toilet Visits Table
+
+```sql
+CREATE TABLE toilet_visits (
+  id SERIAL PRIMARY KEY,
+  user_id UUID REFERENCES users(id),
+  toilet_id INTEGER REFERENCES toilets(id),
+  cleanliness_score INTEGER,
+  score_delta INTEGER,
+  image_url TEXT,
+  ai_result JSONB,
+  created_at TIMESTAMP
+);
+```
+
+## Tips for Using Nearby Toilets
+
+<CardGroup cols={2}>
+  <Card title="Plan Ahead" icon="calendar">
+    Check cleanliness scores before visiting to find well-maintained facilities.
+  </Card>
+  
+  <Card title="Unlock Access" icon="key">
+    Focus on improving your score to access higher-tier premium facilities.
+  </Card>
+  
+  <Card title="Recent Inspections" icon="clock">
+    Toilets with recent inspections have more reliable cleanliness data.
+  </Card>
+  
+  <Card title="Filter Smart" icon="filter">
+    Use tier filters to quickly find facilities you can access.
+  </Card>
+</CardGroup>
+
+## Improving Your Access
+
+To unlock higher-tier toilets:
+
+<Steps>
+  <Step title="Check Current Score">
+    View your score in the top navigation or user profile.
+  </Step>
+
+  <Step title="Calculate Points Needed">
+    - **Bronze → Silver**: Need 50 points
+    - **Silver → Gold**: Need 80 points
+  </Step>
+
+  <Step title="Inspect Clean Toilets">
+    Focus on inspecting well-maintained facilities:
+    - **90-100 score**: +5 points
+    - **70-89 score**: 0 points (neutral)
+    - **Below 70**: Negative points
+  </Step>
+
+  <Step title="Maintain Consistency">
+    Regular inspections of clean facilities gradually improve your score.
+  </Step>
+</Steps>
+
+<Tip>
+  Target Bronze tier toilets with high cleanliness scores to safely earn points without risking penalties.
+</Tip>
+
+## Related Pages
+
+- [QR Scanner](/guides/qr-scanner) - Scanner to access and inspect toilets
+- [Toilet Inspection](/guides/toilet-inspection) - Complete an inspection workflow
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="No toilets showing">
+    **Possible causes**:
+    - Database connection issue
+    - No toilets in database
+    - Filter excluding all results
+    
+    **Solution**: Try "All" filter or contact support.
+  </Accordion>
+
+  <Accordion title="Cleanliness scores not displaying">
+    This means the toilet has no recent inspections. The score will appear once someone inspects it.
+  </Accordion>
+
+  <Accordion title="Can't access any toilets">
+    Your score may be too low. Start with Bronze tier facilities (orange badge) which have minimal requirements.
+  </Accordion>
+
+  <Accordion title="Stats not updating after filtering">
+    Refresh the page. The JavaScript `updateStats()` function should run automatically but may have encountered an error.
+  </Accordion>
+</AccordionGroup>
+
+## Future Enhancements
+
+<CardGroup cols={3}>
+  <Card title="Geolocation" icon="location-dot">
+    Automatic distance calculation from your location
+  </Card>
+  
+  <Card title="Search" icon="magnifying-glass">
+    Search toilets by name or location
+  </Card>
+  
+  <Card title="Favorites" icon="star">
+    Bookmark frequently visited facilities
+  </Card>
+  
+  <Card title="Live Map" icon="map">
+    Interactive map with real-time data
+  </Card>
+  
+  <Card title="Availability" icon="door-open">
+    Show if toilet is currently occupied
+  </Card>
+  
+  <Card title="Reviews" icon="comment">
+    User comments and ratings
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="QR Scanner" icon="qrcode" href="/guides/qr-scanner">
+    Learn how to scan your pass and access facilities
+  </Card>
+  
+  <Card title="Toilet Inspection" icon="camera" href="/guides/toilet-inspection">
+    Understand the inspection and scoring process
+  </Card>
+</CardGroup>

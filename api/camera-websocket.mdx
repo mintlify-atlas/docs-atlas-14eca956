@@ -1,0 +1,321 @@
+---
+title: Camera WebSocket
+description: WebSocket /ws/camera - Real-time communication with camera devices for toilet inspections
+---
+
+## Endpoint
+
+```
+ws://localhost:8000/ws/camera
+```
+
+## Overview
+
+The camera WebSocket enables real-time communication between the FlushLa server and camera devices. When a toilet inspection is initiated, the server sends commands to connected cameras to capture and upload photos.
+
+**Location**: `app/main.py:56`
+
+## Connection Process
+
+### 1. Establish WebSocket Connection
+
+```javascript
+const ws = new WebSocket('ws://localhost:8000/ws/camera');
+
+ws.onopen = () => {
+  console.log('Camera connected to server');
+};
+```
+
+### 2. Server Accepts Connection
+
+When a camera connects:
+
+```python
+@app.websocket("/ws/camera")
+async def camera_ws(ws: WebSocket):
+    await ws.accept()
+    connected_clients.append(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except:
+        connected_clients.remove(ws)
+```
+
+### 3. Camera is Added to Connected Clients
+
+The server maintains a list of all connected cameras in the `connected_clients` array.
+
+## Message Formats
+
+The server sends two types of messages to camera clients:
+
+### SESSION Message
+
+```
+SESSION:{session_id}
+```
+
+Informs the camera of the current workflow session ID.
+
+**Example:**
+```
+SESSION:7c9e6679-7425-40de-944b-e07fc1f90ae7
+```
+
+**When Sent**: Immediately before `CAPTURE` when an inspection is started via `/api/start-toilet-inspection`
+
+### CAPTURE Message
+
+```
+CAPTURE
+```
+
+Triggers the camera to take a photo.
+
+**When Sent**: 
+- During inspection workflow via `/api/start-toilet-inspection`
+- Via manual trigger at `/take-picture`
+
+## Camera Client Implementation
+
+### JavaScript Example
+
+```javascript
+let sessionId = null;
+
+const ws = new WebSocket('ws://localhost:8000/ws/camera');
+
+ws.onmessage = async (event) => {
+  const message = event.data;
+  
+  // Handle SESSION message
+  if (message.startsWith('SESSION:')) {
+    sessionId = message.substring(8);
+    console.log('Received session ID:', sessionId);
+  }
+  
+  // Handle CAPTURE message
+  else if (message === 'CAPTURE') {
+    console.log('Capture triggered');
+    await captureAndUploadPhoto();
+  }
+};
+
+ws.onerror = (error) => {
+  console.error('WebSocket error:', error);
+};
+
+ws.onclose = () => {
+  console.log('WebSocket connection closed');
+};
+
+async function captureAndUploadPhoto() {
+  // Capture photo from camera
+  const photoBlob = await capturePhoto();
+  
+  // Upload to server with session ID
+  const formData = new FormData();
+  formData.append('image', photoBlob, 'photo.jpg');
+  formData.append('session_id', sessionId);
+  
+  const response = await fetch('/upload-photo', {
+    method: 'POST',
+    body: formData
+  });
+  
+  const result = await response.json();
+  console.log('Upload result:', result);
+}
+
+function capturePhoto() {
+  // Camera-specific implementation
+  // Return a Blob or File object
+}
+```
+
+### Python Example
+
+```python
+import asyncio
+import websockets
+import aiohttp
+
+async def camera_client():
+    session_id = None
+    
+    async with websockets.connect('ws://localhost:8000/ws/camera') as ws:
+        print('Connected to server')
+        
+        async for message in ws:
+            # Handle SESSION message
+            if message.startswith('SESSION:'):
+                session_id = message[8:]
+                print(f'Received session ID: {session_id}')
+            
+            # Handle CAPTURE message
+            elif message == 'CAPTURE':
+                print('Capture triggered')
+                await capture_and_upload(session_id)
+
+async def capture_and_upload(session_id):
+    # Capture photo from camera device
+    photo_bytes = capture_photo_from_device()
+    
+    # Upload to server
+    async with aiohttp.ClientSession() as session:
+        form = aiohttp.FormData()
+        form.add_field('image', photo_bytes, filename='photo.jpg')
+        form.add_field('session_id', session_id)
+        
+        async with session.post('http://localhost:8000/upload-photo', data=form) as response:
+            result = await response.json()
+            print('Upload result:', result)
+
+def capture_photo_from_device():
+    # Device-specific implementation
+    # Return bytes of captured image
+    pass
+
+if __name__ == '__main__':
+    asyncio.run(camera_client())
+```
+
+## Workflow Integration
+
+The WebSocket is part of the inspection workflow:
+
+### 1. User Initiates Inspection
+
+```bash
+POST /api/start-toilet-inspection
+{
+  "user_id": "550e8400-e29b-41d4-a716-446655440000",
+  "toilet_id": 1
+}
+```
+
+### 2. Server Sends Messages to Camera
+
+```python
+# Send session ID
+for ws in connected_clients:
+    await ws.send_text(f"SESSION:{session.session_id}")
+
+# Trigger capture
+for ws in connected_clients:
+    await ws.send_text("CAPTURE")
+```
+
+### 3. Camera Captures and Uploads
+
+```bash
+POST /upload-photo
+Content-Type: multipart/form-data
+
+image: [photo data]
+session_id: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+```
+
+### 4. Server Analyzes and Returns Results
+
+See [Upload Photo](/api/upload-photo) for response format.
+
+## Connection Management
+
+### Multiple Cameras
+
+The server supports multiple concurrent camera connections. All connected cameras receive `SESSION` and `CAPTURE` messages.
+
+### Disconnection Handling
+
+When a camera disconnects (closes connection or errors), it's automatically removed from `connected_clients`.
+
+### Checking Connected Cameras
+
+The number of connected cameras is returned in the `/api/start-toilet-inspection` response:
+
+```json
+{
+  "connected_cameras": 1
+}
+```
+
+## Manual Trigger Endpoint
+
+```
+POST /take-picture
+```
+
+**Location**: `app/main.py:70`
+
+Manually trigger camera capture without starting a full workflow.
+
+### Request
+
+<ParamField body="session_id" type="string">
+  Optional session ID to associate with the capture
+</ParamField>
+
+### Example
+
+```bash
+curl -X POST http://localhost:8000/take-picture?session_id=7c9e6679-7425-40de-944b-e07fc1f90ae7
+```
+
+### Response
+
+```json
+{
+  "status": "capture_triggered",
+  "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+}
+```
+
+## HTML Camera Client
+
+FlushLa includes a built-in web-based camera client at:
+
+```
+GET /camera
+```
+
+**Location**: `app/main.py:66`
+
+This renders an HTML page (`cam_capture.html`) that:
+- Connects to the WebSocket
+- Accesses the device camera via `getUserMedia`
+- Automatically captures and uploads photos when commanded
+
+## Debugging
+
+Check active WebSocket connections and sessions:
+
+```bash
+GET /api/debug/workflow-sessions
+```
+
+**Response:**
+
+```json
+{
+  "active_sessions": 2,
+  "connected_cameras": 1,
+  "sessions": {
+    "7c9e6679-7425-40de-944b-e07fc1f90ae7": {
+      "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "user_id": "550e8400-e29b-41d4-a716-446655440000",
+      "toilet_id": 1,
+      "status": "completed",
+      "has_analysis_result": true
+    }
+  }
+}
+```
+
+## Related Endpoints
+
+- [Start Inspection](/api/start-inspection) - Initiate workflow that triggers camera
+- [Upload Photo](/api/upload-photo) - Endpoint where camera uploads captured photos
+- [Workflow Status](/api/workflow-status) - Check status of inspection

@@ -1,0 +1,187 @@
+---
+title: Upload Photo
+description: POST /upload-photo - Upload toilet inspection photo for AI analysis
+---
+
+## Endpoint
+
+```
+POST /upload-photo
+```
+
+## Overview
+
+Uploads a toilet photo for AI analysis. When associated with a workflow session, this endpoint:
+
+1. Receives the image file
+2. Analyzes it using computer vision AI
+3. Detects cleanliness issues
+4. Calculates cleanliness score
+5. Updates user score
+6. Stores results in database
+7. Returns annotated image with detections
+
+**Location**: `app/main.py:80`
+
+## Request Parameters
+
+<ParamField body="image" type="file" required>
+  The image file to upload (multipart/form-data)
+</ParamField>
+
+<ParamField body="session_id" type="string">
+  Optional workflow session ID. If provided, triggers automatic analysis and score updates.
+</ParamField>
+
+## Content Type
+
+```
+Content-Type: multipart/form-data
+```
+
+## Response (With Session)
+
+<ResponseField name="status" type="string">
+  `"analysis_completed"` when analysis succeeds
+</ResponseField>
+
+<ResponseField name="session_id" type="string">
+  The workflow session ID
+</ResponseField>
+
+<ResponseField name="analysis" type="object">
+  AI analysis results including detected issues and cleanliness score
+</ResponseField>
+
+<ResponseField name="analysis.cleanliness_score" type="integer">
+  Overall cleanliness score (0-100)
+</ResponseField>
+
+<ResponseField name="analysis.detections" type="array">
+  Array of detected objects/issues with bounding boxes
+</ResponseField>
+
+<ResponseField name="annotated_image_base64" type="string">
+  Base64-encoded image with bounding boxes drawn around detections
+</ResponseField>
+
+<ResponseField name="score_delta" type="integer">
+  Points added/subtracted from user's score based on cleanliness
+</ResponseField>
+
+<ResponseField name="image_url" type="string">
+  Public URL of the annotated image stored in Supabase Storage
+</ResponseField>
+
+## Response (Without Session)
+
+<ResponseField name="status" type="string">
+  `"photo_received"`
+</ResponseField>
+
+<ResponseField name="session_id" type="string">
+  The session ID provided (or null)
+</ResponseField>
+
+## Example Request
+
+```bash
+curl -X POST http://localhost:8000/upload-photo \
+  -F "image=@toilet_photo.jpg" \
+  -F "session_id=7c9e6679-7425-40de-944b-e07fc1f90ae7"
+```
+
+## Example Response
+
+```json
+{
+  "status": "analysis_completed",
+  "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "analysis": {
+    "cleanliness_score": 85,
+    "detections": [
+      {
+        "class": "toilet_paper",
+        "confidence": 0.95,
+        "bbox": [120, 200, 180, 260]
+      },
+      {
+        "class": "trash",
+        "confidence": 0.87,
+        "bbox": [300, 150, 350, 200]
+      }
+    ],
+    "summary": "Toilet is mostly clean with minor trash detected"
+  },
+  "annotated_image_base64": "iVBORw0KGgoAAAANSUhEUgAA...",
+  "score_delta": 0,
+  "image_url": "https://storage.supabase.co/uploads/toilet_inspection_user123_20260303_143022.jpg"
+}
+```
+
+## Score Delta Calculation
+
+The `score_delta` is calculated based on cleanliness score:
+
+| Cleanliness Score | Score Delta | Meaning |
+|-------------------|-------------|----------|
+| 90-100 | +5 | Bonus for very clean |
+| 70-89 | 0 | Neutral |
+| 50-69 | -5 | Small penalty |
+| 30-49 | -10 | Medium penalty |
+| 0-29 | -15 | Large penalty for very dirty |
+
+**Implementation**: `app/main.py:228`
+
+## Database Storage
+
+When a session is provided, the following record is inserted into `toilet_visits` table:
+
+```json
+{
+  "user_id": "550e8400-e29b-41d4-a716-446655440000",
+  "toilet_id": 1,
+  "ai_result": { /* full analysis object */ },
+  "cleanliness_score": 85,
+  "score_delta": 0,
+  "image_url": "https://storage.supabase.co/...",
+  "created_at": "2026-03-03T14:30:22+08:00"
+}
+```
+
+## Image Storage
+
+Annotated images are uploaded to Supabase Storage:
+
+- **Bucket**: `uploads`
+- **Filename format**: `toilet_inspection_{user_id}_{timestamp}.jpg`
+- **Timezone**: Asia/Singapore (UTC+8)
+
+**Implementation**: `app/main.py:177`
+
+## Error Handling
+
+### Analysis Failed
+
+```json
+{
+  "detail": "Analysis failed: [error message]"
+}
+```
+
+**Status Code**: `500`
+
+## Workflow Integration
+
+This endpoint is designed to work with the [Start Inspection](/api/start-inspection) workflow:
+
+1. Call `/api/start-toilet-inspection` to get a `session_id`
+2. Upload photo to `/upload-photo` with the `session_id`
+3. Analysis happens automatically
+4. User score is updated
+5. Results are stored in database
+
+## Related Endpoints
+
+- [Start Inspection](/api/start-inspection) - Initialize workflow
+- [Workflow Status](/api/workflow-status) - Check analysis status

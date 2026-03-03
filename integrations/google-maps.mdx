@@ -1,0 +1,344 @@
+---
+title: 'Google Maps Integration'
+description: 'Location-based toilet discovery and navigation'
+---
+
+## Overview
+
+FlushLa uses Google Maps to help users find and navigate to nearby toilets. The integration provides:
+- Interactive map view of all toilets in the area
+- Real-time cleanliness scores for each location
+- Visual markers indicating toilet tier (Bronze/Silver/Gold)
+- Navigation to selected toilets
+
+## Nearby Toilets Feature
+
+The `/nearby-toilets` endpoint displays all toilets with their latest inspection data:
+
+```python
+@app.get("/nearby-toilets")
+def nearby_toilets(request: Request):
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    
+    # Fetch all toilets with their latest cleanliness scores
+    toilets_res = (
+        supabase.table("toilets")
+        .select("*")
+        .order("name")
+        .execute()
+    )
+    toilets = toilets_res.data or []
+    
+    # For each toilet, get the latest inspection
+    for toilet in toilets:
+        latest_visit_res = (
+            supabase.table("toilet_visits")
+            .select("cleanliness_score, created_at, image_url")
+            .eq("toilet_id", toilet["id"])
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        
+        if latest_visit_res.data:
+            toilet["latest_inspection"] = latest_visit_res.data[0]
+        else:
+            toilet["latest_inspection"] = None
+    
+    return templates.TemplateResponse(
+        "user/nearby_toilets.html",
+        {"request": request, "user": user, "toilets": toilets}
+    )
+```
+
+## Toilet Data Structure
+
+Each toilet location includes:
+
+```python
+{
+    "id": 1,
+    "name": "City Mall Restroom",
+    "location": "123 Main Street, Level 2",
+    "current_tier": 3,  # 1=Bronze, 2=Silver, 3=Gold
+    "last_cleanliness_score": 92,
+    "latitude": 1.2894,
+    "longitude": 103.8503,
+    "latest_inspection": {
+        "cleanliness_score": 92,
+        "created_at": "2026-03-03T10:30:00+08:00",
+        "image_url": "https://storage.supabase.co/..."
+    }
+}
+```
+
+## Frontend Implementation
+
+While the backend doesn't directly interact with Google Maps API, it provides the data structure needed for the frontend map:
+
+### Map Initialization (Frontend)
+
+```javascript
+// Initialize Google Maps
+function initMap() {
+    const map = new google.maps.Map(document.getElementById('map'), {
+        zoom: 13,
+        center: { lat: 1.2894, lng: 103.8503 }  // Singapore
+    });
+    
+    // Add markers for each toilet
+    toilets.forEach(toilet => {
+        const marker = new google.maps.Marker({
+            position: { 
+                lat: toilet.latitude, 
+                lng: toilet.longitude 
+            },
+            map: map,
+            title: toilet.name,
+            icon: getMarkerIcon(toilet.current_tier)
+        });
+        
+        // Add info window with cleanliness score
+        const infoWindow = new google.maps.InfoWindow({
+            content: `
+                <div>
+                    <h3>${toilet.name}</h3>
+                    <p>${toilet.location}</p>
+                    <p>Score: ${toilet.latest_inspection?.cleanliness_score || 'N/A'}</p>
+                    <p>Tier: ${getTierName(toilet.current_tier)}</p>
+                </div>
+            `
+        });
+        
+        marker.addListener('click', () => {
+            infoWindow.open(map, marker);
+        });
+    });
+}
+
+// Get marker color based on tier
+function getMarkerIcon(tier) {
+    const colors = {
+        1: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png',    // Bronze
+        2: 'http://maps.google.com/mapfiles/ms/icons/yellow-dot.png', // Silver
+        3: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png'   // Gold
+    };
+    return colors[tier] || colors[1];
+}
+```
+
+## Toilet Query Patterns
+
+### Get All Toilets
+
+```python
+# Fetch all toilets ordered by name
+toilets = supabase.table("toilets")
+    .select("*")
+    .order("name")
+    .execute()
+    .data
+```
+
+### Get Toilets by Tier
+
+```python
+# Get only Gold tier toilets
+gold_toilets = supabase.table("toilets")
+    .select("*")
+    .eq("current_tier", 3)
+    .execute()
+    .data
+```
+
+### Get Toilet with Latest Inspection
+
+```python
+def get_toilet_with_latest_inspection(toilet_id: int):
+    # Get toilet info
+    toilet = supabase.table("toilets")
+        .select("*")
+        .eq("id", toilet_id)
+        .single()
+        .execute()
+        .data
+    
+    # Get latest inspection
+    latest = supabase.table("toilet_visits")
+        .select("cleanliness_score, created_at, image_url")
+        .eq("toilet_id", toilet_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+        .data
+    
+    if latest:
+        toilet["latest_inspection"] = latest[0]
+    
+    return toilet
+```
+
+## Location-Based Search
+
+For future proximity-based searches, you can use PostGIS in Supabase:
+
+```sql
+-- Enable PostGIS extension (run in Supabase SQL editor)
+CREATE EXTENSION IF NOT EXISTS postgis;
+
+-- Add geography column to toilets table
+ALTER TABLE toilets 
+ADD COLUMN location_point geography(Point, 4326);
+
+-- Update location_point from latitude/longitude
+UPDATE toilets 
+SET location_point = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326);
+```
+
+Then query nearby toilets:
+
+```python
+# Find toilets within 1km of user location
+user_lat = 1.2894
+user_lng = 103.8503
+
+query = f"""
+    SELECT *, 
+           ST_Distance(
+               location_point,
+               ST_SetSRID(ST_MakePoint({user_lng}, {user_lat}), 4326)
+           ) as distance
+    FROM toilets
+    WHERE ST_DWithin(
+        location_point,
+        ST_SetSRID(ST_MakePoint({user_lng}, {user_lat}), 4326),
+        1000
+    )
+    ORDER BY distance;
+"""
+
+nearby = supabase.rpc('execute_sql', {'query': query}).execute()
+```
+
+## Tier-Based Filtering
+
+Users can filter toilets based on their access level:
+
+```python
+def get_accessible_toilets(user_score: int):
+    """Get toilets the user can access based on their tier"""
+    user_tier = get_user_tier(user_score)
+    
+    # User can access toilets at or below their tier
+    accessible = supabase.table("toilets")
+        .select("*")
+        .lte("current_tier", user_tier)
+        .order("name")
+        .execute()
+        .data
+    
+    return accessible
+```
+
+## Real-Time Score Updates
+
+Toilet scores are updated after each inspection:
+
+```python
+# After a toilet visit is recorded
+visit = supabase.table("toilet_visits").insert({
+    "user_id": user_id,
+    "toilet_id": toilet_id,
+    "cleanliness_score": cleanliness_score,
+    "score_delta": score_delta,
+    "image_url": image_url
+}).execute()
+
+# Update toilet's last cleanliness score
+supabase.table("toilets").update({
+    "last_cleanliness_score": cleanliness_score
+}).eq("id", toilet_id).execute()
+```
+
+## Statistics and Rankings
+
+### Top Performing Toilets
+
+```python
+# Get toilets with highest average cleanliness (admin dashboard)
+toilet_stats_res = supabase.table("toilet_visits")
+    .select("toilet_id, cleanliness_score")
+    .execute()
+
+toilet_stats = {}
+for visit in toilet_stats_res.data or []:
+    if visit["cleanliness_score"] is None:
+        continue
+    tid = visit["toilet_id"]
+    if tid not in toilet_stats:
+        toilet_stats[tid] = {"scores": [], "count": 0}
+    toilet_stats[tid]["scores"].append(visit["cleanliness_score"])
+    toilet_stats[tid]["count"] += 1
+
+# Calculate averages
+top_toilets = []
+for toilet_id, stats in toilet_stats.items():
+    if stats["count"] >= 3:  # At least 3 visits
+        avg_score = sum(stats["scores"]) / len(stats["scores"])
+        toilet_info = supabase.table("toilets")
+            .select("name, location")
+            .eq("id", toilet_id)
+            .single()
+            .execute()
+            .data
+        
+        if toilet_info:
+            top_toilets.append({
+                "name": toilet_info["name"],
+                "location": toilet_info["location"],
+                "avg_score": round(avg_score, 1),
+                "visit_count": stats["count"]
+            })
+
+top_toilets.sort(key=lambda x: x["avg_score"], reverse=True)
+top_toilets = top_toilets[:5]
+```
+
+## Frontend Template Data
+
+The backend passes enriched toilet data to templates:
+
+```python
+return templates.TemplateResponse(
+    "user/nearby_toilets.html",
+    {
+        "request": request,
+        "user": user,
+        "toilets": toilets,  # List of toilets with latest_inspection
+        "user_tier": get_user_tier(user["score"])
+    }
+)
+```
+
+## User Journey
+
+1. **View Map**: User opens `/nearby-toilets` page
+2. **See Toilets**: Map displays all toilets with tier-based markers
+3. **Check Score**: User clicks marker to see latest cleanliness score
+4. **Navigate**: User selects a toilet and gets directions via Google Maps
+5. **Scan QR**: At toilet entrance, user scans QR code for access
+6. **Inspect**: After use, user takes photo for AI cleanliness analysis
+7. **Score Update**: Toilet's cleanliness score and user's score are updated
+
+## Integration Checklist
+
+- [ ] Add Google Maps API key to frontend
+- [ ] Ensure toilets table has `latitude` and `longitude` columns
+- [ ] Implement marker clustering for dense areas
+- [ ] Add user location detection (with permission)
+- [ ] Enable directions API for navigation
+- [ ] Cache toilet data to reduce database queries
+- [ ] Add filters for tier and score ranges
+- [ ] Implement search by toilet name or location

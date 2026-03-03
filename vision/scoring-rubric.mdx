@@ -1,0 +1,323 @@
+---
+title: Scoring Rubric
+description: Understanding how cleanliness scores are calculated from detected issues
+---
+
+FlushLa calculates cleanliness scores using a penalty-based rubric. The system starts at 100 (perfect) and subtracts points for each detected issue.
+
+## Scoring System
+
+From the system prompt in `app/vision.py:73-89`:
+
+```text
+CLEANLINESS SCORING RUBRIC
+--------------------------------
+Start from a base score of 100.
+
+Subtract points as follows:
+- feces_stain: −35 points each
+- pee_stain: −20 points each
+- wet_seat: −10 points each
+- water_puddle: −10 points each
+- toilet_paper_floor: −5 points each
+- trash_on_floor: −5 points each
+
+Rules:
+- Multiple instances of the same issue stack.
+- Clamp the final score between 0 and 100.
+- If no issues are detected, score must be 100.
+```
+
+## Penalty Values
+
+### Severity Tiers
+
+Penalties are weighted by hygiene severity:
+
+| Issue Type | Penalty | Severity | Rationale |
+|------------|---------|----------|----------|
+| `feces_stain` | **-35** | Critical | Major health hazard, requires immediate cleaning |
+| `pee_stain` | **-20** | High | Unsanitary, unpleasant odor |
+| `wet_seat` | **-10** | Medium | Uncomfortable, potential bacteria |
+| `water_puddle` | **-10** | Médium | Slip hazard, dirty water |
+| `toilet_paper_floor` | **-5** | Low | Messy but not hazardous |
+| `trash_on_floor` | **-5** | Low | Untidy appearance |
+
+### Penalty Implementation
+
+The Cloud Vision implementation shows the penalty dictionary (`app/vision.py:209-216`):
+
+```python
+score_penalties = {
+    "feces_stain": 35,
+    "pee_stain": 20,
+    "wet_seat": 10,
+    "water_puddle": 10,
+    "toilet_paper_floor": 5,
+    "trash_on_floor": 5
+}
+```
+
+## Scoring Rules
+
+### 1. Base Score
+
+All toilets start at **100 points** (perfect cleanliness).
+
+```python
+base_score = 100
+```
+
+### 2. Stacking Penalties
+
+<Warning>
+**Multiple instances of the same issue type stack.**
+
+If 3 pee stains are detected, the penalty is:
+
+```
+3 × (-20) = -60 points
+```
+
+This prevents artificially high scores for toilets with multiple problems.
+</Warning>
+
+#### Example: Multiple Issues
+
+```json
+{
+  "detections": [
+    {"issue": "pee_stain"},
+    {"issue": "pee_stain"},
+    {"issue": "toilet_paper_floor"}
+  ]
+}
+```
+
+**Calculation**:
+```
+Base: 100
+Pee stain #1: -20
+Pee stain #2: -20
+Toilet paper: -5
+───────────────
+Final: 55
+```
+
+### 3. Score Clamping
+
+The final score is clamped to the range **[0, 100]**:
+
+```python
+cleanliness_score = max(0, min(100, base_score))
+```
+
+**From**: `app/vision.py:222`
+
+- **Lower bound**: Scores cannot go below 0
+- **Upper bound**: Scores cannot exceed 100
+
+#### Edge Case: Severe Issues
+
+If penalties exceed 100 points:
+
+```json
+{
+  "detections": [
+    {"issue": "feces_stain"},  // -35
+    {"issue": "feces_stain"},  // -35
+    {"issue": "pee_stain"},    // -20
+    {"issue": "pee_stain"}     // -20
+  ]
+}
+```
+
+**Calculation**:
+```
+Base: 100
+Total penalties: -110
+Raw score: -10
+Clamped: 0  ← Cannot go below 0
+```
+
+### 4. Perfect Score
+
+<Note>
+**If no issues are detected, the score MUST be 100.**
+
+This is explicitly stated in the rubric and enforced by the clamping logic.
+</Note>
+
+```json
+{
+  "detections": [],
+  "cleanliness_score": 100
+}
+```
+
+## Score Calculation Examples
+
+### Example 1: Minor Issues
+
+**Detections**:
+- 1 toilet paper on floor
+- 1 small water puddle
+
+**Calculation**:
+```
+100 (base)
+  -5 (toilet_paper_floor)
+ -10 (water_puddle)
+────
+  85
+```
+
+**Grade**: B (Good)
+
+### Example 2: Moderate Issues
+
+**Detections**:
+- 1 wet seat
+- 2 pee stains
+- 1 trash on floor
+
+**Calculation**:
+```
+100 (base)
+ -10 (wet_seat)
+ -20 (pee_stain)
+ -20 (pee_stain)
+  -5 (trash_on_floor)
+────
+  45
+```
+
+**Grade**: F (Poor)
+
+### Example 3: Critical Issues
+
+**Detections**:
+- 2 feces stains
+- 1 pee stain
+
+**Calculation**:
+```
+100 (base)
+ -35 (feces_stain)
+ -35 (feces_stain)
+ -20 (pee_stain)
+────
+  10
+```
+
+**Grade**: F (Failing)
+
+### Example 4: Excessive Issues
+
+**Detections**:
+- 3 feces stains
+- 2 pee stains
+- 1 wet seat
+
+**Calculation**:
+```
+100 (base)
+-105 (3×feces) + -40 (2×pee) + -10 (wet)
+────
+ -55 → Clamped to 0
+```
+
+**Grade**: F (Completely Unsanitary)
+
+## Score Interpretation
+
+### Grading Scale
+
+| Score Range | Grade | Status | Description |
+|-------------|-------|--------|-------------|
+| 90-100 | A | Excellent | Clean, well-maintained |
+| 80-89 | B | Good | Minor cosmetic issues |
+| 70-79 | C | Acceptable | Some visible problems |
+| 60-69 | D | Below Average | Multiple issues present |
+| 0-59 | F | Poor | Unsanitary, needs immediate cleaning |
+
+### Thresholds for Alerts
+
+Recommended alert thresholds:
+
+```python
+if cleanliness_score < 60:
+    send_urgent_alert()  # Critical issues
+elif cleanliness_score < 75:
+    send_warning()       # Needs attention
+```
+
+## Implementation Code
+
+### Cloud Vision Scoring
+
+From `app/vision.py:207-222`:
+
+```python
+# Calculate cleanliness score based on detected issues
+base_score = 100
+score_penalties = {
+    "feces_stain": 35,
+    "pee_stain": 20,
+    "wet_seat": 10,
+    "water_puddle": 10,
+    "toilet_paper_floor": 5,
+    "trash_on_floor": 5
+}
+
+for detection in detections:
+    penalty = score_penalties.get(detection["issue"], 0)
+    base_score -= penalty
+
+cleanliness_score = max(0, min(100, base_score))
+```
+
+### OpenAI/Vertex AI Scoring
+
+For OpenAI and Vertex AI, the scoring is done **by the AI model itself** following the system prompt instructions. The model receives the rubric and calculates the score as part of its JSON response.
+
+<Note>
+Only the Cloud Vision provider implements scoring in Python code. OpenAI and Vertex AI rely on the AI model to calculate scores according to the prompt.
+</Note>
+
+## Customizing the Rubric
+
+To modify penalty values:
+
+1. **Update the system prompt** (`app/vision.py:73-85`)
+2. **Update the penalty dictionary** for Cloud Vision (`app/vision.py:209-216`)
+3. **Test with sample images** to validate new scoring
+
+### Example: Adding New Issue Type
+
+```python
+# 1. Add to allowed issues in SYSTEM_PROMPT
+Allowed issues:
+- wet_seat
+- pee_stain
+- feces_stain
+- toilet_paper_floor
+- trash_on_floor
+- water_puddle
+- clogged_toilet  # NEW
+
+# 2. Add penalty in prompt
+- clogged_toilet: −25 points each
+
+# 3. Update score_penalties dict
+score_penalties = {
+    "feces_stain": 35,
+    "clogged_toilet": 25,  # NEW
+    "pee_stain": 20,
+    # ...
+}
+```
+
+<Warning>
+Changing penalty values affects historical score comparisons. Document any rubric changes and consider versioning your scoring system.
+</Warning>

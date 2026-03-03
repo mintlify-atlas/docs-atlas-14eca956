@@ -1,0 +1,202 @@
+---
+title: User Tiers
+description: Learn about FlushLa's Bronze, Silver, and Gold tier system and how to progress
+---
+
+FlushLa implements a **tier-based access system** that rewards users who maintain high cleanliness standards. Your tier determines which toilets you can access and reflects your hygiene reputation.
+
+## The Three Tiers
+
+<CardGroup cols={3}>
+  <Card title="Bronze Standard" icon="medal" color="#CD7F32">
+    Entry level - Score 0-49
+  </Card>
+  <Card title="Silver Standard" icon="medal" color="#C0C0C0">
+    Mid level - Score 50-79
+  </Card>
+  <Card title="Gold Standard" icon="medal" color="#FFD700">
+    Premium level - Score 80-100
+  </Card>
+</CardGroup>
+
+## Score Thresholds
+
+Your tier is calculated automatically based on your current user score using the `get_user_tier` function:
+
+```python
+def get_user_tier(score: int) -> int:
+    """Calculate user tier based on score
+    Returns: 1 (Bronze), 2 (Silver), or 3 (Gold)
+    """
+    if score >= 80:
+        return 3  # Gold
+    elif score >= 50:
+        return 2  # Silver
+    else:
+        return 1  # Bronze
+```
+
+### Tier Breakdown
+
+| Tier | Tier Number | Score Range | Access Level |
+|------|-------------|-------------|-------------|
+| **Bronze Standard** | 1 | 0 - 49 | Basic toilets only |
+| **Silver Standard** | 2 | 50 - 79 | Bronze + Silver toilets |
+| **Gold Standard** | 3 | 80 - 100 | All toilets (Bronze, Silver, Gold) |
+
+<Note>
+Tier boundaries are **inclusive**. A score of exactly 50 qualifies for Silver tier, and exactly 80 qualifies for Gold tier.
+</Note>
+
+## Tier Progression
+
+Your score changes after each toilet inspection based on the cleanliness score:
+
+<Steps>
+  <Step title="Start at Bronze">
+    New users begin with a score of **41 points** (Bronze tier)
+  </Step>
+  <Step title="Maintain Cleanliness">
+    Leave toilets clean (score 90+) to earn **+5 points** per visit
+  </Step>
+  <Step title="Reach Silver">
+    Accumulate **50 points** to unlock Silver tier access
+  </Step>
+  <Step title="Reach Gold">
+    Maintain high standards to reach **80 points** for Gold tier
+  </Step>
+</Steps>
+
+### Score Changes
+
+Your score adjusts after each inspection:
+
+```python
+# Score update logic (from main.py:274-293)
+def update_user_score(user_id: str):
+    # Get latest score_delta
+    score_delta = get_latest_visit_score_delta(user_id)
+    
+    # Get current score
+    current_score = user.score
+    
+    # Calculate new score
+    new_score = current_score + score_delta
+    
+    # Clamp between 0 and 100
+    if new_score < 0:
+        new_score = 0
+    elif new_score > 100:
+        new_score = 100
+    
+    # Update database
+    update_database(user_id, new_score)
+```
+
+<Warning>
+Scores are **clamped between 0 and 100**. You cannot go below 0 or above 100, even with multiple visits.
+</Warning>
+
+## Benefits of Each Tier
+
+### Bronze Standard (Tier 1)
+
+- **Access**: Entry-level toilets only
+- **Starting point**: All new users start here (score 41)
+- **Restrictions**: Cannot access Silver or Gold tier toilets
+
+### Silver Standard (Tier 2)
+
+- **Access**: Bronze + Silver tier toilets
+- **Unlock requirement**: Reach 50 points
+- **Progress needed from Bronze**: 9 points minimum (2 clean visits)
+
+### Gold Standard (Tier 3)
+
+- **Access**: All toilets in the system
+- **Unlock requirement**: Reach 80 points
+- **Premium status**: Access to the cleanest, best-maintained facilities
+- **Progress needed from Silver**: 30 points (6+ clean visits)
+
+## Access Control System
+
+When scanning a QR code to access a toilet, the system checks tier compatibility (from `main.py:962-972`):
+
+```python
+# Calculate user's tier
+user_tier = get_user_tier(user_score)
+
+# Check if user has sufficient tier
+if user_tier < toilet_tier:
+    return {
+        "access": "denied",
+        "reason": f"Insufficient tier. This is a {get_tier_name(toilet_tier)} toilet.",
+        "user_tier": user_tier,
+        "required_tier": toilet_tier,
+        "points_needed": (50 if toilet_tier == 2 else 80) - user_score
+    }
+```
+
+### Access Denial Example
+
+If a Bronze user (score 45) tries to access a Silver toilet:
+
+```json
+{
+  "access": "denied",
+  "reason": "Insufficient tier. This is a Silver Standard toilet. You need 1 more tier level(s).",
+  "user_tier": 1,
+  "user_tier_name": "Bronze Standard",
+  "required_tier": 2,
+  "required_tier_name": "Silver Standard",
+  "user_score": 45,
+  "points_needed": 5
+}
+```
+
+## Tier Names
+
+The system uses friendly names for each tier level:
+
+```python
+def get_tier_name(tier: int) -> str:
+    """Get tier name from tier number"""
+    tier_names = {
+        1: "Bronze Standard",
+        2: "Silver Standard",
+        3: "Gold Standard"
+    }
+    return tier_names.get(tier, "Unknown")
+```
+
+## Wallet Integration
+
+Your tier and score are synced to your Apple Wallet/Google Wallet pass in real-time:
+
+- **Stored value**: Your current score (0-100)
+- **Push notifications**: Alerts when your score changes
+- **Visual badge**: Tier level displayed on pass
+
+<Note>
+Every time your score updates, the system automatically:
+1. Updates your score in the database
+2. Syncs the new score to your wallet pass
+3. Sends a push notification with the updated score
+</Note>
+
+## Progression Strategy
+
+### Fast Track to Silver (Bronze → Silver)
+- **Goal**: Gain 9+ points (from starting 41 to 50)
+- **Strategy**: 2 excellent inspections (90+ score) = +10 points
+- **Time**: Can be achieved in 2 visits
+
+### Road to Gold (Silver → Gold)
+- **Goal**: Gain 30 points (from 50 to 80)
+- **Strategy**: 6 excellent inspections = +30 points
+- **Avoid**: Any poor inspection (-10 or -15) sets you back significantly
+
+### Maintaining Gold
+- **Challenge**: Stay above 80 points
+- **Risk**: 2 poor inspections (-10 each) drops you to Silver
+- **Recommendation**: Consistently maintain 90+ cleanliness scores

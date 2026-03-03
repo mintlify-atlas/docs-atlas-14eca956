@@ -1,0 +1,219 @@
+---
+title: User Profile
+description: GET /user - Get the current authenticated user's profile and activity
+---
+
+## Endpoint
+
+```
+GET /user
+```
+
+<Note>
+This is a web route that returns an HTML page, not a JSON API endpoint. For API access to user data, use the `get_current_user()` function.
+</Note>
+
+## Overview
+
+Returns the authenticated user's profile page with their recent toilet inspection history.
+
+**Location**: `app/main.py:537` (Home route)
+
+## Authentication
+
+Requires an active session. Redirects to landing page if not authenticated.
+
+## Data Returned
+
+The user profile page displays:
+
+### User Information
+
+- Username
+- Email
+- Current score (0-100)
+- User tier (Bronze/Silver/Gold)
+- Admin status
+
+### Recent Activity
+
+Last 5 toilet visits with:
+
+<ResponseField name="id" type="integer">
+  Visit record ID
+</ResponseField>
+
+<ResponseField name="toilet_id" type="integer">
+  ID of the inspected toilet
+</ResponseField>
+
+<ResponseField name="toilet.name" type="string">
+  Name of the toilet location
+</ResponseField>
+
+<ResponseField name="toilet.location" type="string">
+  Physical location description
+</ResponseField>
+
+<ResponseField name="cleanliness_score" type="integer">
+  Score for this specific visit (0-100)
+</ResponseField>
+
+<ResponseField name="score_delta" type="integer">
+  Points change from this visit (+5 to -15)
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  Timestamp of the visit
+</ResponseField>
+
+<ResponseField name="image_url" type="string">
+  URL of the annotated inspection photo
+</ResponseField>
+
+<ResponseField name="ai_result" type="object">
+  Full AI analysis results with detections
+</ResponseField>
+
+## User Tier System
+
+User tiers are calculated based on score:
+
+| Score Range | Tier | Name |
+|-------------|------|------|
+| 80-100 | 3 | Gold Standard |
+| 50-79 | 2 | Silver Standard |
+| 0-49 | 1 | Bronze Standard |
+
+**Implementation**: `app/main.py:241`
+
+```python
+def get_user_tier(score: int) -> int:
+    if score >= 80:
+        return 3  # Gold
+    elif score >= 50:
+        return 2  # Silver
+    else:
+        return 1  # Bronze
+```
+
+## get_current_user() Helper
+
+For API routes that need user data, use the `get_current_user()` function:
+
+```python
+from app.main import get_current_user
+
+@app.get("/api/my-endpoint")
+def my_endpoint(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    return {
+        "user_id": user["id"],
+        "username": user["username"],
+        "score": user["score"]
+    }
+```
+
+### User Object Structure
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "username": "John Doe",
+  "email": "john.doe@example.com",
+  "score": 75,
+  "is_admin": false,
+  "created_at": "2026-02-15T10:30:00Z",
+  "updated_at": "2026-03-03T14:30:22Z"
+}
+```
+
+## Score Updates
+
+User scores are updated automatically after each toilet inspection via the `update_user_score()` function:
+
+**Location**: `app/main.py:274`
+
+### Update Process
+
+1. Fetch the latest `score_delta` from `toilet_visits`
+2. Get current user score
+3. Calculate new score (clamped to 0-100)
+4. Update database
+5. Update digital pass via PassCreator API
+6. Send push notification to user's wallet
+
+### Score Bounds
+
+```python
+new_score = current_score + score_delta
+if new_score < 0:
+    new_score = 0
+elif new_score > 100:
+    new_score = 100
+```
+
+## PassCreator Integration
+
+When a user's score changes, their digital wallet pass is updated:
+
+```javascript
+PATCH https://app.passcreator.com/api/v3/pass/{identifier}
+
+Body:
+{
+  "data": {
+    "storedValue": 75
+  }
+}
+```
+
+A push notification is also sent:
+
+```javascript
+POST https://app.passcreator.com/api/pass/{identifier}/sendpushnotification
+
+Body:
+{
+  "pushNotificationText": "Your toilet cleanliness score has been updated to 75."
+}
+```
+
+## Admin Users
+
+Users with `is_admin: true` are redirected to the admin dashboard at `/admin` instead of the user profile page.
+
+## Example Visit History
+
+```json
+[
+  {
+    "id": 123,
+    "toilet_id": 1,
+    "toilet": {
+      "id": 1,
+      "name": "Plaza Shopping Mall - Level 2",
+      "location": "123 Main Street",
+      "current_tier": 2,
+      "last_cleanliness_score": 85
+    },
+    "cleanliness_score": 85,
+    "score_delta": 0,
+    "created_at": "2026-03-03T14:30:22+08:00",
+    "image_url": "https://storage.supabase.co/uploads/toilet_inspection_user123_20260303_143022.jpg",
+    "ai_result": {
+      "cleanliness_score": 85,
+      "detections": []
+    }
+  }
+]
+```
+
+## Related Endpoints
+
+- [Login](/api/login) - Authenticate to access profile
+- [Nearby Toilets](/api/nearby-toilets) - Find toilets to inspect
+- [Start Inspection](/api/start-inspection) - Begin a new inspection

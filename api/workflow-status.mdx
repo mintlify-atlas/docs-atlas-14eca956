@@ -1,0 +1,169 @@
+---
+title: Workflow Status
+description: GET /api/workflow-status/{session_id} - Check the status of a toilet inspection workflow
+---
+
+## Endpoint
+
+```
+GET /api/workflow-status/{session_id}
+```
+
+## Overview
+
+Returns the current status of a workflow session, including analysis results when available.
+
+**Location**: `app/main.py:396`
+
+## Path Parameters
+
+<ParamField path="session_id" type="string" required>
+  The unique UUID of the workflow session
+</ParamField>
+
+## Response
+
+<ResponseField name="session_id" type="string">
+  The workflow session UUID
+</ResponseField>
+
+<ResponseField name="user_id" type="string">
+  ID of the user who initiated the inspection
+</ResponseField>
+
+<ResponseField name="toilet_id" type="integer">
+  ID of the toilet being inspected
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current workflow state (see table below)
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp of when the session was created
+</ResponseField>
+
+<ResponseField name="analysis_result" type="object">
+  Only present when `status` is `"completed"`. Contains full analysis data.
+</ResponseField>
+
+<ResponseField name="analysis_result.analysis" type="object">
+  AI analysis results with cleanliness score and detections
+</ResponseField>
+
+<ResponseField name="analysis_result.annotated_image_base64" type="string">
+  Base64-encoded annotated image with bounding boxes
+</ResponseField>
+
+<ResponseField name="analysis_result.score_delta" type="integer">
+  Points change for the user's score
+</ResponseField>
+
+<ResponseField name="analysis_result.image_url" type="string">
+  Public URL of the stored annotated image
+</ResponseField>
+
+## Session States
+
+| Status | Description |
+|--------|-------------|
+| `waiting_for_capture` | Session created, waiting for camera to capture photo |
+| `capture_triggered` | Camera has been signaled to take a photo |
+| `analyzing` | Photo uploaded, AI analysis in progress |
+| `completed` | Analysis complete, results available in `analysis_result` |
+| `error` | An error occurred, check `analysis_result.error` |
+
+## Example Request
+
+```bash
+curl http://localhost:8000/api/workflow-status/7c9e6679-7425-40de-944b-e07fc1f90ae7
+```
+
+## Example Response (In Progress)
+
+```json
+{
+  "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "user_id": "550e8400-e29b-41d4-a716-446655440000",
+  "toilet_id": 1,
+  "status": "analyzing",
+  "created_at": "2026-03-03T14:30:15.123456"
+}
+```
+
+## Example Response (Completed)
+
+```json
+{
+  "session_id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "user_id": "550e8400-e29b-41d4-a716-446655440000",
+  "toilet_id": 1,
+  "status": "completed",
+  "created_at": "2026-03-03T14:30:15.123456",
+  "analysis_result": {
+    "analysis": {
+      "cleanliness_score": 85,
+      "detections": [
+        {
+          "class": "toilet_paper",
+          "confidence": 0.95,
+          "bbox": [120, 200, 180, 260]
+        }
+      ]
+    },
+    "annotated_image_base64": "iVBORw0KGgoAAAANSUhEUgAA...",
+    "score_delta": 0,
+    "image_url": "https://storage.supabase.co/uploads/toilet_inspection_user123_20260303_143022.jpg"
+  }
+}
+```
+
+## Error Response
+
+### Session Not Found
+
+```json
+{
+  "detail": "Workflow session not found"
+}
+```
+
+**Status Code**: `404`
+
+## Polling Pattern
+
+For real-time updates, implement polling:
+
+```javascript
+async function pollWorkflowStatus(sessionId) {
+  const maxAttempts = 30;
+  const pollInterval = 2000; // 2 seconds
+  
+  for (let i = 0; i < maxAttempts; i++) {
+    const response = await fetch(`/api/workflow-status/${sessionId}`);
+    const data = await response.json();
+    
+    if (data.status === 'completed' || data.status === 'error') {
+      return data;
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+  }
+  
+  throw new Error('Workflow timeout');
+}
+```
+
+## Usage in Workflow
+
+1. Start inspection: `POST /api/start-toilet-inspection`
+2. Get `session_id` from response
+3. Upload photo: `POST /upload-photo` with `session_id`
+4. Poll this endpoint until `status` is `"completed"` or `"error"`
+5. Retrieve analysis results from `analysis_result`
+
+## Related Endpoints
+
+- [Start Inspection](/api/start-inspection) - Create a new workflow session
+- [Upload Photo](/api/upload-photo) - Upload photo for analysis
+- [DELETE /api/workflow-session/{session_id}] - Clean up completed session (app/main.py:487)

@@ -1,0 +1,275 @@
+---
+title: 'Supabase Integration'
+description: 'Database and storage setup for FlushLa'
+---
+
+## Overview
+
+FlushLa uses Supabase as its backend-as-a-service platform, providing:
+- PostgreSQL database for user data, toilet visits, and passes
+- Storage buckets for toilet inspection images
+- Authentication with Row Level Security (RLS)
+- Admin client for bypassing auth restrictions
+
+## Client Setup
+
+FlushLa uses two Supabase clients with different permission levels:
+
+```python
+from supabase import create_client, Client
+import os
+
+# Public client (normal queries, RLS applies)
+supabase = create_client(
+    os.getenv("SUPABASE_URL"),
+    os.getenv("SUPABASE_ANON_KEY")
+)
+
+# Admin client (bypasses auth & email confirmation)
+supabase_admin = create_client(
+    os.getenv("SUPABASE_URL"),
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+)
+```
+
+<Note>
+The admin client is used for operations that require elevated permissions, such as creating users without email confirmation and uploading images to storage.
+</Note>
+
+## Environment Variables
+
+Add these environment variables to your `.env` file:
+
+```bash
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+```
+
+<Warning>
+Never commit `SUPABASE_SERVICE_ROLE_KEY` to version control. This key bypasses all Row Level Security policies.
+</Warning>
+
+## Database Tables
+
+### users
+
+Stores user profiles and cleanliness scores:
+
+```python
+# Create a new user
+supabase_admin.table("users").insert({
+    "id": user_id,  # UUID from Supabase Auth
+    "username": "john_doe",
+    "email": "john@example.com",
+    "score": 41,  # Cleanliness score (0-100)
+    "is_admin": False
+}).execute()
+
+# Update user score
+supabase.table("users").update({
+    "score": new_cleanliness_score
+}).eq("id", user_id).execute()
+
+# Fetch user by ID
+user = supabase.table("users").select("*").eq("id", user_id).single().execute()
+```
+
+### toilet_visits
+
+Records each toilet inspection with AI analysis results:
+
+```python
+# Insert a new toilet visit
+supabase.table("toilet_visits").insert({
+    "user_id": session.user_id,
+    "toilet_id": session.toilet_id,
+    "ai_result": analysis,  # JSON object with detections
+    "cleanliness_score": cleanliness_score,  # 0-100
+    "score_delta": score_delta,  # Points gained/lost
+    "image_url": image_url,  # Public URL from storage
+    "created_at": datetime.now(timezone(timedelta(hours=8))).isoformat()
+}).execute()
+
+# Get latest visit for a user
+visit = supabase.table("toilet_visits")
+    .select("score_delta")
+    .eq("user_id", user_id)
+    .order("created_at", desc=True)
+    .limit(1)
+    .single()
+    .execute()
+```
+
+### toilets
+
+Stores toilet locations and their current tier status:
+
+```python
+# Fetch all toilets with their tier
+toilets = supabase.table("toilets")
+    .select("id, name, location, current_tier, last_cleanliness_score")
+    .order("name")
+    .execute()
+
+# Get toilet by ID
+toilet = supabase.table("toilets")
+    .select("*")
+    .eq("id", toilet_id)
+    .single()
+    .execute()
+```
+
+### passes
+
+Links users to their Apple Wallet passes:
+
+```python
+# Create a pass record
+supabase_admin.table("passes").insert({
+    "user_id": user_id,
+    "pass_identifier": pass_id  # QR code value from PassCreator
+}).execute()
+
+# Look up user by pass identifier
+pass_data = supabase.table("passes")
+    .select("*, users(*)")
+    .eq("pass_identifier", qr_code_data)
+    .execute()
+```
+
+## Storage Bucket
+
+### Uploading Images
+
+Annotated toilet inspection images are stored in the `uploads` bucket:
+
+```python
+async def upload_image_to_supabase(image_bytes: bytes, filename: str) -> str:
+    """Upload image to Supabase storage and return public URL"""
+    try:
+        # Use admin client to bypass RLS policies
+        result = supabase_admin.storage.from_("uploads").upload(
+            filename, 
+            image_bytes,
+            file_options={
+                "content-type": "image/jpeg",
+                "cache-control": "3600",
+                "upsert": "true"  # Overwrite if exists
+            }
+        )
+        
+        if result:
+            # Get the public URL
+            public_url = supabase_admin.storage.from_("uploads").get_public_url(filename)
+            return public_url
+        else:
+            raise Exception("Failed to upload image to storage")
+    except Exception as e:
+        print(f"Error uploading image: {e}")
+        raise
+```
+
+### Example Usage
+
+```python
+# Generate filename with timestamp
+timestamp = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d_%H%M%S")
+filename = f"toilet_inspection_{user_id}_{timestamp}.jpg"
+
+# Upload annotated image
+image_url = await upload_image_to_supabase(annotated_bytes, filename)
+```
+
+## Authentication
+
+### Sign In
+
+```python
+# Authenticate user with email and password
+auth_response = supabase.auth.sign_in_with_password({
+    "email": "user@example.com",
+    "password": "password123"
+})
+
+user_id = auth_response.user.id
+```
+
+### Create User (Admin)
+
+```python
+# Create user without email confirmation
+auth_user = supabase_admin.auth.admin.create_user({
+    "email": "newuser@example.com",
+    "password": "1234",
+    "email_confirm": True  # Skip email verification
+})
+
+user_id = auth_user.user.id
+```
+
+### Sign Out
+
+```python
+try:
+    supabase.auth.sign_out()
+except Exception:
+    pass  # Already signed out
+```
+
+## Query Examples
+
+### Complex Joins
+
+```python
+# Fetch recent visits with user and toilet info
+recent_visits = supabase.table("toilet_visits")
+    .select("*, users(username), toilets(name, location)")
+    .order("created_at", desc=True)
+    .limit(10)
+    .execute()
+```
+
+### Aggregations
+
+```python
+# Count total users
+total_users = supabase.table("users")
+    .select("id", count="exact")
+    .execute()
+    .count
+
+# Filter and count
+flagged = supabase.table("toilet_visits")
+    .select("id", count="exact")
+    .lt("score_delta", 0)
+    .execute()
+    .count
+```
+
+## Best Practices
+
+1. **Use the right client**: Use `supabase` for user-facing queries (RLS applies) and `supabase_admin` for system operations
+2. **Handle exceptions**: Wrap database calls in try/except blocks
+3. **Validate data**: Check if `.data` exists before accessing results
+4. **Use `.single()`**: When expecting exactly one row to get an object instead of an array
+5. **Set timezone**: Use `timezone(timedelta(hours=8))` for Asia/Singapore timestamps
+
+## Error Handling
+
+```python
+try:
+    result = supabase.table("users")
+        .select("*")
+        .eq("id", user_id)
+        .single()
+        .execute()
+    
+    if not result.data:
+        return {"error": True, "message": "User not found"}
+    
+    user = result.data
+except Exception as e:
+    print(f"Database error: {e}")
+    return {"error": True, "message": "Database operation failed"}
+```

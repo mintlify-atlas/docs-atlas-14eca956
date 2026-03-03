@@ -1,0 +1,339 @@
+---
+title: Toilet Inspection Guide
+description: Step-by-step guide to performing toilet inspections with AI analysis
+---
+
+## Overview
+
+FlushLa uses AI-powered image analysis to evaluate toilet cleanliness. This guide explains how to start an inspection, capture photos, and understand your results.
+
+## Prerequisites
+
+Before starting an inspection:
+
+<Check>
+  - You must be logged in with a valid account
+  - Have your QR code scanned for facility access
+  - Ensure camera permissions are granted
+  - A camera window must be open at `/camera`
+</Check>
+
+## Starting an Inspection
+
+<Steps>
+  <Step title="Access the QR Scanner">
+    Navigate to `/qr-access-scanner` from your dashboard or the nearby toilets page.
+
+    
+  </Step>
+
+  <Step title="Scan Your Pass">
+    Use your device's camera to scan your Apple Wallet QR code.
+
+    The system calls `/api/verify-access` which:
+    - Looks up your pass in the `passes` table
+    - Retrieves your user profile
+    - Calculates your tier based on score
+    - Checks if you can access the toilet's tier
+
+    <Info>
+      Access is granted only if your user tier >= toilet tier.
+    </Info>
+  </Step>
+
+  <Step title="Grant Access">
+    Upon successful verification, you'll see:
+    - Your username and current score
+    - Your tier level (Bronze, Silver, or Gold)
+    - "Start Inspection" button becomes active
+  </Step>
+
+  <Step title="Click Start Inspection">
+    Click the **Start Toilet Inspection** button.
+
+    This triggers `/api/start-toilet-inspection` with:
+    ```json
+    {
+      "user_id": "your-user-id",
+      "toilet_id": 1
+    }
+    ```
+
+    The backend:
+    1. Creates a `WorkflowSession` with unique session ID
+    2. Sends session ID to connected camera clients via WebSocket
+    3. Triggers camera capture with `"CAPTURE"` command
+    4. Returns session details for polling
+  </Step>
+</Steps>
+
+## Taking the Photo
+
+<Steps>
+  <Step title="Camera Activates">
+    The camera window at `/camera` receives the WebSocket message and automatically captures a photo.
+
+    <Note>
+      The camera must be open in a separate window/tab and have an active WebSocket connection to `/ws/camera`.
+    </Note>
+  </Step>
+
+  <Step title="Photo Upload">
+    The captured image is automatically uploaded to `/upload-photo` with:
+    - Image file as multipart form data
+    - `session_id` parameter linking to your workflow session
+
+    
+  </Step>
+
+  <Step title="Processing Begins">
+    Once uploaded, the workflow session status changes to `"analyzing"`.
+
+    The system:
+    1. Receives image bytes
+    2. Calls `analyze_toilet_image()` for AI analysis
+    3. Processes detections and calculates cleanliness score
+    4. Generates annotated image with bounding boxes via `draw_boxes()`
+  </Step>
+</Steps>
+
+## AI Analysis Process
+
+The `analyze_toilet_image()` function performs:
+
+<Steps>
+  <Step title="Object Detection">
+    AI vision model detects cleanliness issues:
+    - Toilet paper on floor
+    - Water puddles
+    - Stains and dirt
+    - Broken fixtures
+    - Other maintenance issues
+  </Step>
+
+  <Step title="Cleanliness Scoring">
+    Based on detected issues, a cleanliness score (0-100) is calculated:
+    - **90-100**: Excellent condition
+    - **70-89**: Good condition
+    - **50-69**: Fair condition
+    - **30-49**: Poor condition
+    - **0-29**: Critical condition
+  </Step>
+
+  <Step title="Annotation">
+    Detected issues are highlighted with bounding boxes on the image using `draw_boxes()`.
+  </Step>
+</Steps>
+
+## Understanding Results
+
+<Steps>
+  <Step title="Receive Analysis">
+    The inspection results include:
+
+    ```json
+    {
+      "status": "analysis_completed",
+      "session_id": "uuid",
+      "analysis": {
+        "cleanliness_score": 85,
+        "issues": ["water_puddle"],
+        "detections": [...]
+      },
+      "annotated_image_base64": "...",
+      "score_delta": 0,
+      "image_url": "https://..."
+    }
+    ```
+  </Step>
+
+  <Step title="View Score Impact">
+    Your personal score is adjusted based on cleanliness:
+
+    | Cleanliness Score | Score Delta | Impact |
+    |-------------------|-------------|--------|
+    | 90-100 | +5 | Bonus for very clean |
+    | 70-89 | 0 | Neutral |
+    | 50-69 | -5 | Small penalty |
+    | 30-49 | -10 | Medium penalty |
+    | 0-29 | -15 | Large penalty |
+
+    <Info>
+      Score deltas are calculated by the `calculate_score_delta()` function in main.py:228.
+    </Info>
+  </Step>
+
+  <Step title="Annotated Image">
+    View the annotated image showing detected issues with bounding boxes.
+
+    The image is:
+    - Stored in Supabase Storage bucket `"uploads"`
+    - Filename format: `toilet_inspection_{user_id}_{timestamp}.jpg`
+    - Publicly accessible via the returned URL
+
+    
+  </Step>
+
+  <Step title="Database Record">
+    A record is created in the `toilet_visits` table:
+
+    ```sql
+    INSERT INTO toilet_visits (
+      user_id,
+      toilet_id,
+      ai_result,
+      cleanliness_score,
+      score_delta,
+      image_url,
+      created_at
+    ) VALUES (...);
+    ```
+  </Step>
+</Steps>
+
+## Score Updates
+
+After analysis completes:
+
+<Steps>
+  <Step title="User Score Update">
+    The `update_user_score()` function:
+    1. Fetches the latest `score_delta` from your visit
+    2. Retrieves your current score from `users` table
+    3. Calculates new score (clamped between 0-100)
+    4. Updates database with new score
+  </Step>
+
+  <Step title="Pass Update">
+    Your Apple Wallet pass is updated via PassCreator API:
+    - New score is synced to `storedValue` field
+    - Push notification sent to your device
+    - Pass reflects updated score in real-time
+
+    <Tip>
+      Check your Apple Wallet to see your updated score and tier status.
+    </Tip>
+  </Step>
+
+  <Step title="Tier Recalculation">
+    If your score crosses tier thresholds, your access level changes:
+    - **Upgrade**: Unlock access to higher-tier facilities
+    - **Downgrade**: May lose access to premium facilities
+  </Step>
+</Steps>
+
+## Workflow Status Polling
+
+The QR scanner interface polls `/api/workflow-status/{session_id}` to track progress:
+
+| Status | Description | Next Action |
+|--------|-------------|-------------|
+| `waiting_for_capture` | Session created, waiting for camera | Continue polling |
+| `capture_triggered` | Camera signal sent | Continue polling |
+| `analyzing` | AI processing image | Continue polling |
+| `completed` | Analysis finished | Display results |
+| `error` | Analysis failed | Show error, allow retry |
+
+<CodeGroup>
+```javascript Client Polling
+async function pollInspectionStatus() {
+  const response = await fetch(`/api/workflow-status/${sessionId}`);
+  const data = await response.json();
+  
+  switch (data.status) {
+    case "analyzing":
+      // Show processing state
+      setTimeout(pollInspectionStatus, 2000);
+      break;
+    case "completed":
+      // Display results
+      showResults(data.analysis_result);
+      break;
+  }
+}
+```
+
+```python Backend Session
+class WorkflowSession:
+    def __init__(self, user_id: str, toilet_id: int = 1):
+        self.session_id = str(uuid.uuid4())
+        self.user_id = user_id
+        self.toilet_id = toilet_id
+        self.status = "waiting_for_capture"
+        self.image_data = None
+        self.analysis_result = None
+```
+</CodeGroup>
+
+## Related Endpoints
+
+- **POST** `/api/start-toilet-inspection` - Initiate inspection workflow
+- **POST** `/upload-photo` - Upload and analyze toilet image
+- **GET** `/api/workflow-status/{session_id}` - Check inspection progress
+- **DELETE** `/api/workflow-session/{session_id}` - Clean up completed session
+- **WS** `/ws/camera` - WebSocket for camera control
+- **GET** `/camera` - Camera capture interface
+
+## Tips for Best Results
+
+<CardGroup cols={2}>
+  <Card title="Good Lighting" icon="sun">
+    Ensure the toilet area is well-lit for accurate AI detection.
+  </Card>
+  
+  <Card title="Clear View" icon="eye">
+    Capture the entire toilet area including floor and fixtures.
+  </Card>
+  
+  <Card title="Steady Shot" icon="camera">
+    Hold the camera steady to avoid blurry images.
+  </Card>
+  
+  <Card title="Multiple Angles" icon="rotate">
+    For thorough inspection, capture from different angles.
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Camera not activating">
+    Ensure:
+    - Camera window is open at `/camera`
+    - WebSocket connection is established (check for green "Online" indicator)
+    - Browser has camera permissions granted
+  </Accordion>
+
+  <Accordion title="Analysis taking too long">
+    The AI analysis typically takes 5-15 seconds. If longer:
+    - Check your internet connection
+    - Refresh the page and try again
+    - Contact support if issue persists
+  </Accordion>
+
+  <Accordion title="Score not updating">
+    Verify:
+    - Inspection completed successfully
+    - Check `/` dashboard for latest visit record
+    - Apple Wallet pass may take a few moments to sync
+  </Accordion>
+
+  <Accordion title="Upload failed error">
+    Common causes:
+    - Image too large (should be under 10MB)
+    - Network timeout
+    - Session expired - start a new inspection
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="View User Profile" icon="user" href="/api/user-profile">
+    Check your inspection history and current tier
+  </Card>
+  
+  <Card title="Find Toilets" icon="map-marker-alt" href="/guides/nearby-toilets">
+    Discover nearby facilities to inspect
+  </Card>
+</CardGroup>

@@ -1,0 +1,217 @@
+---
+title: Register
+description: POST /api/create_passkey - Register a new user and create a digital pass
+---
+
+## Endpoint
+
+```
+POST /api/create_passkey
+```
+
+## Overview
+
+Registers a new user in the FlushLa system and creates a digital pass (wallet card) for them. This endpoint:
+
+1. Validates that the email is not already registered
+2. Creates a Supabase Auth user (with email verification bypassed)
+3. Inserts user profile into the database
+4. Creates a digital pass via PassCreator API
+5. Stores the pass identifier
+6. Automatically logs in the user
+
+**Location**: `app/main.py:1055`
+
+## Request Body
+
+<ParamField body="templateId" type="string" required>
+  The PassCreator template ID to use for generating the digital pass
+</ParamField>
+
+<ParamField body="emailRecipient" type="string" required>
+  User's email address (must be unique)
+</ParamField>
+
+<ParamField body="firstname" type="string" required>
+  User's first name (used as username)
+</ParamField>
+
+### Request Schema
+
+```python
+class CreatePasskeyRequest(BaseModel):
+    templateId: str
+    emailRecipient: str
+    firstname: str
+```
+
+## Response (Success)
+
+<ResponseField name="success" type="boolean">
+  Always `true` on successful registration
+</ResponseField>
+
+<ResponseField name="user_id" type="string">
+  The newly created user's UUID
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Success message
+</ResponseField>
+
+## Response (Error)
+
+<ResponseField name="error" type="boolean">
+  `true` when an error occurs
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Error description
+</ResponseField>
+
+## Example Request
+
+```bash
+curl -X POST http://localhost:8000/api/create_passkey \
+  -H "Content-Type: application/json" \
+  -d '{
+    "templateId": "template_abc123",
+    "emailRecipient": "john.doe@example.com",
+    "firstname": "John"
+  }'
+```
+
+## Example Response (Success)
+
+```json
+{
+  "success": true,
+  "user_id": "550e8400-e29b-41d4-a716-446655440000",
+  "message": "User created and pass issued"
+}
+```
+
+## Example Response (User Exists)
+
+```json
+{
+  "error": true,
+  "message": "Account already exists"
+}
+```
+
+## Default User Properties
+
+New users are created with:
+
+- **Password**: `"1234"` (should be changed by user)
+- **Score**: `41` (initial cleanliness score)
+- **Email Confirmation**: Bypassed (set to confirmed)
+- **Admin Status**: `false`
+
+## PassCreator Integration
+
+The endpoint calls the PassCreator API to generate a digital wallet pass:
+
+```javascript
+POST https://app.passcreator.com/api/v3/pass
+
+Headers:
+  Authorization: [PASSKEYAPI env variable]
+  Content-Type: application/json
+
+Body:
+{
+  "data": {
+    "templateId": "template_abc123",
+    "emailRecipient": "john.doe@example.com",
+    "firstname": "John"
+  }
+}
+```
+
+The pass is automatically sent to the user's email and can be added to Apple Wallet or Google Pay.
+
+## Database Records Created
+
+### 1. Supabase Auth User
+
+```json
+{
+  "email": "john.doe@example.com",
+  "password": "1234",
+  "email_confirm": true
+}
+```
+
+### 2. Public Users Table
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "username": "John",
+  "email": "john.doe@example.com",
+  "score": 41,
+  "is_admin": false
+}
+```
+
+### 3. Passes Table
+
+```json
+{
+  "user_id": "550e8400-e29b-41d4-a716-446655440000",
+  "pass_identifier": "passkey_abc123def456"
+}
+```
+
+## Session Management
+
+Upon successful registration, the user is automatically logged in:
+
+```python
+request.session["user_id"] = user_id
+```
+
+The session cookie is sent to the client and can be used for subsequent authenticated requests.
+
+## Error Handling
+
+### Account Already Exists
+
+**Status Code**: `200` (with error flag)
+
+```json
+{
+  "error": true,
+  "message": "Account already exists"
+}
+```
+
+### PassCreator API Failure
+
+**Status Code**: `200` (with error details)
+
+```json
+{
+  "error": true,
+  "status": 400,
+  "raw": "PassCreator API error message"
+}
+```
+
+### Invalid Pass Response
+
+**Status Code**: `500`
+
+```json
+{
+  "detail": "Invalid pass API response"
+}
+```
+
+## Related Endpoints
+
+- [Login](/api/login) - Authenticate existing users
+- [User Profile](/api/user-profile) - Get current user information
+- [Authentication](/api/authentication) - Authentication overview

@@ -1,0 +1,159 @@
+---
+title: Cleanliness Scoring
+description: Understanding how FlushLa's AI vision system scores toilet cleanliness
+---
+
+FlushLa uses an AI-powered vision system to automatically detect hygiene issues and calculate cleanliness scores for toilet inspections. Every inspection photo is analyzed in real-time, providing objective, consistent scoring.
+
+## How AI Scoring Works
+
+The cleanliness score is a **0-100 scale** that represents the overall hygiene state of a toilet cubicle:
+
+- **90-100**: Excellent - Very clean, bonus points awarded
+- **70-89**: Good - Clean enough, neutral impact
+- **50-69**: Fair - Minor issues, small penalty
+- **30-49**: Poor - Multiple issues, medium penalty
+- **0-29**: Critical - Severe hygiene problems, large penalty
+
+<Note>
+The AI only detects **visible** hygiene issues. It does not infer or assume hidden dirt.
+</Note>
+
+## Detection Rules and Penalties
+
+The AI vision system starts from a base score of **100 points** and subtracts penalties for each detected issue:
+
+| Issue Type | Penalty | Description |
+|------------|---------|-------------|
+| `feces_stain` | **-35 points** | Visible fecal matter |
+| `pee_stain` | **-20 points** | Urine stains on surfaces |
+| `wet_seat` | **-10 points** | Wet toilet seat |
+| `water_puddle` | **-10 points** | Water on the floor |
+| `toilet_paper_floor` | **-5 points** | Toilet paper on the floor |
+| `trash_on_floor` | **-5 points** | Litter or trash on the floor |
+
+<Warning>
+Multiple instances of the same issue **stack**. For example, 2 wet seats = -20 points total.
+</Warning>
+
+### Detection Criteria
+
+For each detected issue, the AI provides:
+
+- **Bounding box** - Pixel coordinates `[x1, y1, x2, y2]` showing where the issue is located
+- **Issue classification** - One of the allowed issue types from the list above
+- **Confidence score** - A value between 0 and 1 indicating detection certainty
+
+## Score Calculation Logic
+
+The `calculate_score_delta` function converts the cleanliness score into **user score changes**:
+
+```python
+def calculate_score_delta(cleanliness_score: int) -> int:
+    """Calculate score delta based on cleanliness score"""
+    if cleanliness_score >= 90:
+        return 5  # Bonus for very clean
+    elif cleanliness_score >= 70:
+        return 0  # Neutral
+    elif cleanliness_score >= 50:
+        return -5  # Small penalty
+    elif cleanliness_score >= 30:
+        return -10  # Medium penalty
+    else:
+        return -15  # Large penalty for very dirty
+```
+
+<Steps>
+  <Step title="Photo Capture">
+    User takes a photo of the toilet after use
+  </Step>
+  <Step title="AI Analysis">
+    Vision AI detects hygiene issues and calculates cleanliness score (0-100)
+  </Step>
+  <Step title="Score Delta">
+    Cleanliness score is converted to user score change (-15 to +5 points)
+  </Step>
+  <Step title="User Score Update">
+    Delta is applied to user's total score, clamped between 0-100
+  </Step>
+</Steps>
+
+## Real Examples
+
+### Example 1: Clean Toilet
+```json
+{
+  "detections": [],
+  "cleanliness_score": 100,
+  "issues": [],
+  "confidence": 1.0
+}
+```
+**Result**: User receives **+5 points** (bonus for excellent cleanliness)
+
+### Example 2: Minor Issues
+```json
+{
+  "detections": [
+    {
+      "bbox": [120, 340, 180, 380],
+      "issue": "toilet_paper_floor",
+      "confidence": 0.92
+    },
+    {
+      "bbox": [200, 100, 350, 140],
+      "issue": "wet_seat",
+      "confidence": 0.88
+    }
+  ],
+  "cleanliness_score": 85,
+  "issues": ["toilet_paper_floor", "wet_seat"],
+  "confidence": 0.90
+}
+```
+**Calculation**: 100 - 5 (paper) - 10 (wet seat) = 85
+
+**Result**: User receives **0 points** (neutral, score 70-89 range)
+
+### Example 3: Severe Issues
+```json
+{
+  "detections": [
+    {
+      "bbox": [150, 200, 250, 300],
+      "issue": "feces_stain",
+      "confidence": 0.95
+    },
+    {
+      "bbox": [180, 150, 280, 190],
+      "issue": "pee_stain",
+      "confidence": 0.89
+    },
+    {
+      "bbox": [300, 400, 380, 450],
+      "issue": "water_puddle",
+      "confidence": 0.91
+    }
+  ],
+  "cleanliness_score": 35,
+  "issues": ["feces_stain", "pee_stain", "water_puddle"],
+  "confidence": 0.92
+}
+```
+**Calculation**: 100 - 35 (feces) - 20 (pee) - 10 (water) = 35
+
+**Result**: User receives **-10 points** (medium penalty, score 30-49 range)
+
+## Vision Provider Configuration
+
+FlushLa supports multiple AI vision providers (configured in `vision.py:33`):
+
+- **OpenAI GPT-4 Vision** - High accuracy, requires OpenAI API key
+- **Google Vertex AI Gemini** - Google Cloud integration
+- **Google Cloud Vision** - Basic object detection (simplified)
+
+The system automatically falls back to a default score of 75 if analysis fails.
+
+<Note>
+All analyses are stored in the `toilet_visits` table with the full AI result, cleanliness score, score delta, and annotated image URL.
+</Note>

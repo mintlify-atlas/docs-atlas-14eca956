@@ -1,0 +1,262 @@
+---
+title: Detection Rules
+description: AI system rules for detecting toilet hygiene issues
+---
+
+The vision AI follows strict detection rules defined in the system prompt. These rules ensure consistent, accurate analysis across all providers.
+
+## System Prompt
+
+The complete system prompt from `app/vision.py:46`:
+
+```text
+You are a toilet hygiene inspection vision system.
+
+Analyze the image of a toilet cubicle taken from a mobile phone.
+
+Your task is to detect visible hygiene issues and compute a cleanliness score
+using the marking rubric below.
+
+--------------------------------
+DETECTION RULES
+--------------------------------
+Detect issues ONLY if clearly visible.
+Do NOT infer or assume hidden dirt.
+
+For each detected issue:
+- classify using the allowed list
+- provide a bounding box in pixel coordinates [x1, y1, x2, y2]
+- provide a confidence score between 0 and 1
+
+Allowed issues:
+- wet_seat
+- pee_stain
+- feces_stain
+- toilet_paper_floor
+- trash_on_floor
+- water_puddle
+```
+
+## Detection Principles
+
+### 1. Visible Issues Only
+
+<Warning>
+**Critical Rule**: The AI must only detect issues that are **clearly visible** in the image.
+
+The system should **NOT**:
+- Infer hidden dirt behind objects
+- Assume issues in shadows or dark areas
+- Guess based on context clues
+</Warning>
+
+This prevents false positives and ensures fair scoring for toilet owners.
+
+### 2. Strict Classification
+
+All detected issues must use one of the six allowed types. The AI cannot create custom categories or use synonyms.
+
+## Allowed Issue Types
+
+| Issue Type | Description | Visual Indicators |
+|------------|-------------|-------------------|
+| `wet_seat` | Water or liquid on toilet seat | Visible moisture, water droplets, wet surface |
+| `pee_stain` | Urine stains on seat or bowl | Yellow/amber discoloration |
+| `feces_stain` | Fecal matter or stains | Brown stains, visible waste |
+| `toilet_paper_floor` | Toilet paper on floor | Paper tissue visible on ground |
+| `trash_on_floor` | Garbage or debris on floor | Wrappers, cups, other trash items |
+| `water_puddle` | Water pooled on floor | Standing water, wet floor areas |
+
+<Note>
+These issue types are hardcoded in the system prompt and scoring rubric. Adding new types requires updating both the prompt and penalty calculations.
+</Note>
+
+## Bounding Box Requirements
+
+### Format
+
+Each detection must include a bounding box in pixel coordinates:
+
+```json
+{
+  "bbox": [x1, y1, x2, y2],
+  "issue": "pee_stain",
+  "confidence": 0.87
+}
+```
+
+### Coordinate System
+
+- **Format**: `[x1, y1, x2, y2]` in absolute pixels
+- **x1, y1**: Top-left corner of the box
+- **x2, y2**: Bottom-right corner of the box
+- **Origin**: Top-left of image is (0, 0)
+
+### Visual Example
+
+```
+(0,0) ─────────────────► x
+  │
+  │    (x1,y1) ┌─────────┐
+  │            │  Issue  │
+  │            │  Area   │
+  │            └─────────┘ (x2,y2)
+  │
+  ▼
+  y
+```
+
+### Coordinate Bounds
+
+<Warning>
+AI models can sometimes generate coordinates outside image boundaries. The `draw_boxes()` function handles this:
+
+```python
+# Clamp to image bounds (LLMs can overshoot)
+x1 = max(0, min(x1, w))
+x2 = max(0, min(x2, w))
+y1 = max(0, min(y1, h))
+y2 = max(0, min(y2, h))
+```
+
+Always validate coordinates before using them for cropping or analysis.
+</Warning>
+
+## Confidence Scoring
+
+### Per-Detection Confidence
+
+Each detection includes a confidence score from 0 to 1:
+
+```json
+{
+  "bbox": [120, 45, 280, 150],
+  "issue": "wet_seat",
+  "confidence": 0.92  // 92% confident
+}
+```
+
+### Confidence Guidelines
+
+| Range | Interpretation | Usage |
+|-------|----------------|-------|
+| 0.9 - 1.0 | Very high confidence | Issue is extremely clear |
+| 0.7 - 0.9 | High confidence | Issue is clearly visible |
+| 0.5 - 0.7 | Moderate confidence | Issue is visible but ambiguous |
+| 0.0 - 0.5 | Low confidence | Issue is uncertain or faint |
+
+<Note>
+Confidence thresholds are **not enforced** in the current system. All detections are included regardless of confidence. Consider filtering low-confidence detections in your application logic.
+</Note>
+
+### Average Confidence
+
+The overall response includes average confidence across all detections:
+
+```json
+{
+  "detections": [
+    {"issue": "wet_seat", "confidence": 0.9},
+    {"issue": "pee_stain", "confidence": 0.8}
+  ],
+  "confidence": 0.85  // Average of 0.9 and 0.8
+}
+```
+
+Calculation from `app/vision.py:225`:
+
+```python
+avg_confidence = sum(d["confidence"] for d in detections) / len(detections) if detections else 1.0
+```
+
+If no issues are detected, confidence defaults to `1.0` (100% confident the toilet is clean).
+
+## Output Format Requirements
+
+The system prompt enforces strict JSON output:
+
+```text
+OUTPUT FORMAT
+--------------------------------
+Return a JSON object with:
+- detections: list of detected issues with bbox [x1, y1, x2, y2], issue type, and confidence
+- cleanliness_score: integer from 0 to 100
+- issues: unique list of issues detected
+- confidence: average confidence across detections (0–1)
+
+Respond ONLY in valid JSON.
+Do NOT include explanations or extra text.
+```
+
+### JSON Parsing
+
+The `json_safe_parse()` function handles malformed responses:
+
+```python
+def json_safe_parse(text: str) -> dict:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Attempt to extract JSON block
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise ValueError("No JSON found in model response")
+        return json.loads(match.group())
+```
+
+**Location**: `app/vision.py:105`
+
+This handles cases where the AI includes markdown formatting or explanatory text:
+
+```markdown
+Here's the analysis:
+
+```json
+{"detections": [], "cleanliness_score": 100}
+```
+```
+
+The regex extracts just the JSON object.
+
+## Example Detection Output
+
+### Clean Toilet
+
+```json
+{
+  "detections": [],
+  "cleanliness_score": 100,
+  "issues": [],
+  "confidence": 1.0
+}
+```
+
+### Toilet with Issues
+
+```json
+{
+  "detections": [
+    {
+      "bbox": [145, 230, 310, 340],
+      "issue": "pee_stain",
+      "confidence": 0.88
+    },
+    {
+      "bbox": [50, 450, 120, 480],
+      "issue": "toilet_paper_floor",
+      "confidence": 0.95
+    }
+  ],
+  "cleanliness_score": 75,
+  "issues": ["pee_stain", "toilet_paper_floor"],
+  "confidence": 0.915
+}
+```
+
+**Score Calculation**:
+- Base: 100
+- Pee stain: -20
+- Toilet paper on floor: -5
+- **Final**: 75
+
+**Average Confidence**: (0.88 + 0.95) / 2 = 0.915

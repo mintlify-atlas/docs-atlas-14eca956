@@ -1,0 +1,190 @@
+---
+title: Nearby Toilets
+description: GET /nearby-toilets - Get a list of all toilets with their latest inspection data
+---
+
+## Endpoint
+
+```
+GET /nearby-toilets
+```
+
+<Note>
+This is a web route that returns an HTML page. For API access, you can query the Supabase `toilets` table directly.
+</Note>
+
+## Overview
+
+Displays all registered toilets with their latest cleanliness scores and inspection photos. Users can browse available toilets before performing an inspection.
+
+**Location**: `app/main.py:591`
+
+## Authentication
+
+Requires an active session. Redirects to `/login` if not authenticated.
+
+## Data Structure
+
+### Toilet Object
+
+<ResponseField name="id" type="integer">
+  Unique toilet identifier
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Toilet name/location (e.g., "Plaza Shopping Mall - Level 2")
+</ResponseField>
+
+<ResponseField name="location" type="string">
+  Physical address or description
+</ResponseField>
+
+<ResponseField name="current_tier" type="integer">
+  Current tier classification (1=Bronze, 2=Silver, 3=Gold)
+</ResponseField>
+
+<ResponseField name="last_cleanliness_score" type="integer">
+  Most recent cleanliness score (0-100)
+</ResponseField>
+
+<ResponseField name="latest_inspection" type="object">
+  Data from the most recent toilet visit (null if never inspected)
+</ResponseField>
+
+<ResponseField name="latest_inspection.cleanliness_score" type="integer">
+  Score from the latest inspection
+</ResponseField>
+
+<ResponseField name="latest_inspection.created_at" type="string">
+  Timestamp of the latest inspection
+</ResponseField>
+
+<ResponseField name="latest_inspection.image_url" type="string">
+  URL of the annotated inspection photo
+</ResponseField>
+
+## Query Logic
+
+1. **Fetch all toilets** from the `toilets` table, ordered by name
+2. **For each toilet**, fetch the latest inspection from `toilet_visits`
+3. **Attach** the latest inspection data to each toilet object
+
+```python
+toilets_res = supabase.table("toilets")
+    .select("*")
+    .order("name")
+    .execute()
+
+for toilet in toilets:
+    latest_visit_res = supabase.table("toilet_visits")
+        .select("cleanliness_score, created_at, image_url")
+        .eq("toilet_id", toilet["id"])
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    
+    toilet["latest_inspection"] = latest_visit_res.data[0] if latest_visit_res.data else None
+```
+
+## Example Toilet Data
+
+```json
+[
+  {
+    "id": 1,
+    "name": "Plaza Shopping Mall - Level 2",
+    "location": "123 Main Street, Singapore",
+    "current_tier": 2,
+    "last_cleanliness_score": 85,
+    "latest_inspection": {
+      "cleanliness_score": 85,
+      "created_at": "2026-03-03T14:30:22+08:00",
+      "image_url": "https://storage.supabase.co/uploads/toilet_inspection_user123_20260303_143022.jpg"
+    }
+  },
+  {
+    "id": 2,
+    "name": "Central Park Public Restroom",
+    "location": "Central Park West, Section A",
+    "current_tier": 1,
+    "last_cleanliness_score": 62,
+    "latest_inspection": {
+      "cleanliness_score": 62,
+      "created_at": "2026-03-02T09:15:00+08:00",
+      "image_url": "https://storage.supabase.co/uploads/toilet_inspection_user456_20260302_091500.jpg"
+    }
+  },
+  {
+    "id": 3,
+    "name": "Airport Terminal 3 - Gate B12",
+    "location": "Changi Airport Terminal 3",
+    "current_tier": 3,
+    "last_cleanliness_score": 95,
+    "latest_inspection": null
+  }
+]
+```
+
+## Toilet Tier System
+
+Toilets are classified into tiers based on their cleanliness standards:
+
+| Tier | Name | Access Requirement |
+|------|------|--------------------|
+| 3 | Gold Standard | User score ≥ 80 |
+| 2 | Silver Standard | User score ≥ 50 |
+| 1 | Bronze Standard | No restrictions |
+
+See [Toilet Details](/api/toilet-details) for more on tier-based access control.
+
+## Use Cases
+
+### 1. Browse Available Toilets
+
+Users can view all toilets and their current cleanliness status before deciding which one to inspect.
+
+### 2. Check Inspection History
+
+See when a toilet was last inspected and its score to determine if a new inspection is needed.
+
+### 3. Select Toilet for Inspection
+
+Once a toilet is selected, use its `id` to start an inspection:
+
+```bash
+curl -X POST http://localhost:8000/api/start-toilet-inspection \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "550e8400-e29b-41d4-a716-446655440000",
+    "toilet_id": 1
+  }'
+```
+
+## Direct API Access
+
+To get toilet data programmatically, query Supabase directly:
+
+```javascript
+const { data: toilets } = await supabase
+  .from('toilets')
+  .select('*')
+  .order('name');
+
+for (const toilet of toilets) {
+  const { data: latestVisit } = await supabase
+    .from('toilet_visits')
+    .select('cleanliness_score, created_at, image_url')
+    .eq('toilet_id', toilet.id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+  
+  toilet.latest_inspection = latestVisit;
+}
+```
+
+## Related Endpoints
+
+- [Toilet Details](/api/toilet-details) - Detailed information about specific toilets
+- [Start Inspection](/api/start-inspection) - Begin inspecting a toilet
+- [User Profile](/api/user-profile) - View your inspection history

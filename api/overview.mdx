@@ -1,0 +1,113 @@
+---
+title: API Overview
+description: Overview of the FlushLa API architecture and conventions
+---
+
+## Base URL
+
+The FlushLa API is built with FastAPI and runs on:
+
+```
+http://localhost:8000
+```
+
+## Architecture
+
+FlushLa uses **FastAPI** as its web framework, providing:
+
+- Fast, async request handling
+- Automatic OpenAPI documentation
+- Built-in request validation with Pydantic models
+- WebSocket support for real-time camera communication
+
+## Middleware
+
+The API includes the following middleware:
+
+### CORS Middleware
+
+```python
+allow_origins=["*"]
+allow_headers=["*"]
+allow_methods=["*"]
+```
+
+### Session Middleware
+
+Session-based authentication using `SessionMiddleware` with a secret key for secure session management.
+
+## Response Formats
+
+All API responses return JSON with the following patterns:
+
+### Success Response
+
+```json
+{
+  "status": "success",
+  "data": {
+    // Response data
+  }
+}
+```
+
+### Error Response
+
+```json
+{
+  "error": true,
+  "message": "Error description",
+  "detail": "Additional error details"
+}
+```
+
+## Error Handling
+
+The API uses standard HTTP status codes:
+
+| Status Code | Description |
+|-------------|-------------|
+| `200` | Success |
+| `400` | Bad Request - Invalid parameters |
+| `401` | Unauthorized - Not authenticated |
+| `403` | Forbidden - Insufficient permissions |
+| `404` | Not Found - Resource doesn't exist |
+| `500` | Internal Server Error |
+
+## Authentication
+
+FlushLa uses session-based authentication. See the [Authentication](/api/authentication) guide for details.
+
+## Common Data Models
+
+### WorkflowSession
+
+Represents an active toilet inspection workflow:
+
+<ResponseField name="session_id" type="string" required>
+  Unique identifier for the workflow session (UUID)
+</ResponseField>
+
+<ResponseField name="user_id" type="string" required>
+  ID of the user performing the inspection
+</ResponseField>
+
+<ResponseField name="toilet_id" type="integer" required>
+  ID of the toilet being inspected
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Current status: `waiting_for_capture`, `capture_triggered`, `analyzing`, `completed`, or `error`
+</ResponseField>
+
+<ResponseField name="created_at" type="string" required>
+  ISO 8601 timestamp of session creation
+</ResponseField>
+
+## API Endpoints
+
+- **Authentication**: [Login](/api/login), [Register](/api/register), [Authentication Guide](/api/authentication)
+- **Inspection Workflow**: [Start Inspection](/api/start-inspection), [Upload Photo](/api/upload-photo), [Workflow Status](/api/workflow-status)
+- **User Management**: [User Profile](/api/user-profile)
+- **Toilet Information**: [Nearby Toilets](/api/nearby-toilets), [Toilet Details](/api/toilet-details)
+- **Real-time Communication**: [Camera WebSocket](/api/camera-websocket)

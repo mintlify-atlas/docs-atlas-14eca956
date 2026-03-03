@@ -1,0 +1,368 @@
+---
+title: QR Access Scanner
+description: Use your digital pass to access FlushLa facilities
+---
+
+## Overview
+
+The QR Access Scanner is FlushLa's entry point for facility access and inspection. Users scan their Apple Wallet pass QR code to verify their access tier and begin toilet inspections.
+
+## Accessing the Scanner
+
+Navigate to `/qr-access-scanner` from:
+- Your user dashboard
+- Nearby toilets page ("Inspect" button)
+- Direct URL access
+
+
+
+## How It Works
+
+<Steps>
+  <Step title="Camera Initialization">
+    The scanner uses the `Html5Qrcode` library to access your device camera.
+
+    ```javascript
+    const scanner = new Html5Qrcode("reader");
+    scanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      onQRCodeDetected
+    );
+    ```
+
+    <Info>
+      Grant camera permissions when prompted for the scanner to function.
+    </Info>
+  </Step>
+
+  <Step title="Scan Your Pass">
+    Open Apple Wallet on your device and present the FlushLa pass QR code to the camera.
+
+    The QR code contains your unique pass identifier in the format:
+    ```
+    FlushLa:{your-pass-id}
+    ```
+  </Step>
+
+  <Step title="Access Verification">
+    When a QR code is detected, the scanner:
+
+    1. **Pauses scanning** to prevent duplicate reads
+    2. **Sends verification request** to `/api/verify-access`
+    3. **Processes response** for access decision
+
+    Request payload:
+    ```json
+    {
+      "qr_code_data": "FlushLa:abc123...",
+      "toilet_id": 1
+    }
+    ```
+  </Step>
+</Steps>
+
+## Access Verification Process
+
+The `/api/verify-access` endpoint (main.py:911) performs:
+
+<Steps>
+  <Step title="Pass Lookup">
+    Queries the `passes` table with the scanned identifier:
+
+    ```python
+    res = supabase
+      .table("passes")
+      .select("*, users(*)")
+      .eq("pass_identifier", qr_code_data)
+      .execute()
+    ```
+  </Step>
+
+  <Step title="User Retrieval">
+    Fetches associated user data including:
+    - User ID
+    - Username
+    - Email
+    - Current score
+  </Step>
+
+  <Step title="Toilet Information">
+    Retrieves toilet details from `toilets` table:
+
+    ```python
+    toilet_res = supabase
+      .table("toilets")
+      .select("*")
+      .eq("id", toilet_id)
+      .single()
+      .execute()
+    ```
+  </Step>
+
+  <Step title="Tier Calculation">
+    Determines user's tier using `get_user_tier()` function:
+
+    ```python
+    def get_user_tier(score: int) -> int:
+        if score >= 80:
+            return 3  # Gold
+        elif score >= 50:
+            return 2  # Silver
+        else:
+            return 1  # Bronze
+    ```
+  </Step>
+
+  <Step title="Access Decision">
+    Compares user tier with toilet tier:
+
+    ```python
+    if user_tier < toilet_tier:
+        return {"access": "denied", "reason": "...", ...}
+    else:
+        return {"access": "granted", "user": {...}, ...}
+    ```
+  </Step>
+</Steps>
+
+## Access Granted Response
+
+When access is granted, you receive:
+
+```json
+{
+  "access": "granted",
+  "user": {
+    "id": "user-uuid",
+    "username": "John Doe",
+    "email": "john@example.com",
+    "score": 75,
+    "tier": 2,
+    "tier_name": "Silver Standard"
+  },
+  "toilet": {
+    "id": 1,
+    "name": "Main Lobby Restroom",
+    "tier": 2,
+    "tier_name": "Silver Standard"
+  }
+}
+```
+
+### What Happens Next
+
+<Steps>
+  <Step title="Session Created">
+    Your `user_id` is stored in the session:
+
+    ```python
+    request.session["user_id"] = user_data["id"]
+    ```
+
+    This logs you into the system automatically.
+  </Step>
+
+  <Step title="User Info Displayed">
+    The interface shows:
+    - Your username and profile initial
+    - Current score with star icon
+    - Tier level badge
+
+    
+  </Step>
+
+  <Step title="Inspection Section Appears">
+    The "Start Inspection" section becomes visible, allowing you to begin toilet inspection.
+  </Step>
+</Steps>
+
+## Access Denied Response
+
+If your tier is insufficient, you receive:
+
+```json
+{
+  "access": "denied",
+  "reason": "Insufficient tier. This is a Gold Standard toilet. You need 1 more tier level(s).",
+  "user_tier": 2,
+  "user_tier_name": "Silver Standard",
+  "required_tier": 3,
+  "required_tier_name": "Gold Standard",
+  "user_score": 65,
+  "points_needed": 15
+}
+```
+
+### Denied Access Display
+
+The scanner shows:
+- Red "Access Denied" message
+- Detailed tier comparison card
+- Your current tier vs. required tier
+- Points needed to upgrade
+- Helpful tip for improvement
+
+
+
+<Warning>
+  After 8 seconds, the scanner automatically resumes to allow you to scan a different pass or retry.
+</Warning>
+
+## Quick Toilet Access
+
+The QR scanner provides the fastest way to:
+
+<CardGroup cols={2}>
+  <Card title="Instant Login" icon="bolt">
+    Scanning your pass logs you in automatically - no password needed.
+  </Card>
+  
+  <Card title="Verify Access" icon="shield-check">
+    Immediately see if you can access the facility based on your tier.
+  </Card>
+  
+  <Card title="Start Inspection" icon="play">
+    One button to begin AI-powered cleanliness inspection.
+  </Card>
+  
+  <Card title="Track Activity" icon="chart-line">
+    All scans and inspections are logged to your account.
+  </Card>
+</CardGroup>
+
+## Scanner Interface Features
+
+### Status Indicators
+
+| Indicator | Color | Meaning |
+|-----------|-------|----------|
+| Green pulse dot | Green | Scanner online and ready |
+| "Ready to scan" | Purple | Waiting for QR code |
+| "Verifying access..." | Yellow | Processing your pass |
+| "Access Granted" | Green | Success - access allowed |
+| "Access Denied" | Red | Insufficient tier |
+
+### Visual Feedback
+
+The interface uses animations and gradients:
+
+```css
+.success-gradient {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+}
+
+.error-gradient {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+}
+
+.fade-in {
+  animation: fadeIn 0.5s ease-out;
+}
+```
+
+## Related Endpoints
+
+- **POST** `/api/verify-access` - Verify QR code and check access
+- **GET** `/qr-access-scanner` - Scanner interface page
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Keep Pass Ready" icon="wallet">
+    Add FlushLa pass to your Apple Wallet for quick access.
+  </Card>
+  
+  <Card title="Check Tier Requirements" icon="layer-group">
+    Review toilet tier before visiting to ensure you have access.
+  </Card>
+  
+  <Card title="Maintain Score" icon="arrow-trend-up">
+    Regular inspections of clean toilets help maintain high scores.
+  </Card>
+  
+  <Card title="Update Pass" icon="arrows-rotate">
+    Ensure your pass syncs after inspections to reflect current score.
+  </Card>
+</CardGroup>
+
+## Tier System Explained
+
+### Bronze Standard (Tier 1)
+- **Score Range**: 0-49
+- **Access**: Bronze tier toilets only
+- **Badge Color**: Orange
+
+### Silver Standard (Tier 2)
+- **Score Range**: 50-79
+- **Access**: Silver and Bronze tier toilets
+- **Badge Color**: Gray/Silver
+
+### Gold Standard (Tier 3)
+- **Score Range**: 80-100
+- **Access**: All toilets (Gold, Silver, Bronze)
+- **Badge Color**: Yellow/Gold
+
+<Tip>
+  Earn points by inspecting toilets with high cleanliness scores. Scores above 90 give you a +5 bonus!
+</Tip>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Camera not working">
+    **Solutions**:
+    - Grant camera permissions in browser settings
+    - Ensure HTTPS connection (camera requires secure context)
+    - Try a different browser if issues persist
+    - Check if another app is using the camera
+  </Accordion>
+
+  <Accordion title="QR code not scanning">
+    **Solutions**:
+    - Ensure good lighting conditions
+    - Hold the pass steady within the scanner frame
+    - Clean your camera lens
+    - Try increasing screen brightness
+    - Verify the pass is from FlushLa (correct QR format)
+  </Accordion>
+
+  <Accordion title="Invalid pass error">
+    **Causes**:
+    - QR code not registered in system
+    - Database connection issue
+    - Corrupted or fake pass
+    
+    **Solution**: Re-register your account to get a new pass.
+  </Accordion>
+
+  <Accordion title="User not found error">
+    This means the pass exists but the associated user account is missing or deleted. Contact support for assistance.
+  </Accordion>
+
+  <Accordion title="Toilet not found error">
+    The `toilet_id` parameter doesn't match any toilet in the database. This is typically a configuration issue - contact support.
+  </Accordion>
+</AccordionGroup>
+
+## Security Notes
+
+<Warning>
+  **Session Security**: The QR scan logs you in by setting `request.session["user_id"]`. Keep your pass private to prevent unauthorized access.
+</Warning>
+
+<Info>
+  Pass identifiers are unique UUIDs stored in the `passes` table with foreign key to `users.id`. Each pass is linked to exactly one user account.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Start Inspection" icon="camera" href="/guides/toilet-inspection">
+    Learn how to perform toilet inspections
+  </Card>
+  
+  <Card title="Find Toilets" icon="map" href="/guides/nearby-toilets">
+    Discover nearby facilities you can access
+  </Card>
+</CardGroup>

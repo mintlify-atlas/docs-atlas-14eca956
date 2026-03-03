@@ -1,0 +1,164 @@
+---
+title: Vision System Overview
+description: Understanding FlushLa's AI-powered toilet hygiene analysis system
+---
+
+FlushLa uses advanced AI vision models to automatically analyze toilet cleanliness from photos. The system detects hygiene issues, provides bounding boxes, and calculates cleanliness scores.
+
+## How Vision Analysis Works
+
+The vision system processes toilet images through a three-step workflow:
+
+1. **Image Input**: Accept image bytes from mobile uploads
+2. **AI Analysis**: Route to configured vision provider (OpenAI, Vertex AI, or Cloud Vision)
+3. **Structured Output**: Return detections with bounding boxes, scores, and confidence levels
+
+## Main Analysis Function
+
+The `analyze_toilet_image()` function is the primary entry point for vision analysis:
+
+```python
+def analyze_toilet_image(image_bytes: bytes) -> dict:
+    """Main analysis function that routes to the configured provider"""
+    try:
+        if VISION_PROVIDER == "openai":
+            return analyze_with_openai(image_bytes)
+        elif VISION_PROVIDER == "vertex_ai":
+            return analyze_with_vertex_ai(image_bytes)
+        elif VISION_PROVIDER == "cloud_vision":
+            return analyze_with_cloud_vision(image_bytes)
+        else:
+            raise ValueError(f"Unknown vision provider: {VISION_PROVIDER}")
+    except Exception as e:
+        print(f"Vision analysis failed with {VISION_PROVIDER}: {str(e)}")
+        # Fallback to a basic analysis
+        return {
+            "detections": [],
+            "cleanliness_score": 75,  # Default neutral score
+            "issues": [],
+            "confidence": 0.5,
+            "error": str(e)
+        }
+```
+
+**Location**: `app/vision.py:242`
+
+<Note>
+The function automatically falls back to a neutral score (75) if the vision provider fails, ensuring the system remains operational.
+</Note>
+
+## Drawing Bounding Boxes
+
+The `draw_boxes()` function visualizes detected issues on images:
+
+```python
+def draw_boxes(image_bytes: bytes, detections: list) -> bytes:
+    """Draw bounding boxes on the image for detected issues"""
+    img = cv2.imdecode(
+        np.frombuffer(image_bytes, np.uint8),
+        cv2.IMREAD_COLOR
+    )
+
+    h, w = img.shape[:2]
+    for d in detections:
+        x1, y1, x2, y2 = d["bbox"]
+
+        # Clamp to image bounds (LLMs can overshoot)
+        x1 = max(0, min(x1, w))
+        x2 = max(0, min(x2, w))
+        y1 = max(0, min(y1, h))
+        y2 = max(0, min(y2, h))
+        
+        # Handle different field names from providers
+        if "issue" in d:
+            label = f'{d["issue"]} {d.get("confidence", 0):.2f}'
+        elif "issue_type" in d:
+            label = f'{d["issue_type"]} {d.get("confidence", 0):.2f}'
+        else:
+            label = f'{d["type"]} {d.get("confidence", 0):.2f}'
+            
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+        cv2.putText(
+            img,
+            label,
+            (x1, max(15, y1 - 5)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 0, 255),
+            1
+        )
+
+    _, encoded = cv2.imencode(".jpg", img)
+    return encoded.tobytes()
+```
+
+**Location**: `app/vision.py:265`
+
+### Key Features
+
+- **Coordinate Clamping**: Prevents bounding boxes from exceeding image boundaries (LLMs can sometimes overshoot)
+- **Red Boxes**: Uses OpenCV to draw red rectangles around detected issues
+- **Labels**: Displays issue type and confidence score above each box
+- **Flexible Field Names**: Handles `issue`, `issue_type`, or `type` fields from different providers
+
+## Output Format
+
+All vision providers return a standardized JSON structure:
+
+```json
+{
+  "detections": [
+    {
+      "bbox": [x1, y1, x2, y2],
+      "issue": "pee_stain",
+      "confidence": 0.87
+    }
+  ],
+  "cleanliness_score": 80,
+  "issues": ["pee_stain"],
+  "confidence": 0.87
+}
+```
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `detections` | Array | List of detected issues with bounding boxes |
+| `cleanliness_score` | Integer | Score from 0-100 based on scoring rubric |
+| `issues` | Array | Unique list of issue types found |
+| `confidence` | Float | Average confidence across all detections (0-1) |
+
+### Bounding Box Format
+
+Bounding boxes use pixel coordinates `[x1, y1, x2, y2]`:
+
+- `x1, y1`: Top-left corner
+- `x2, y2`: Bottom-right corner
+
+<Warning>
+Coordinates are in absolute pixels, not normalized values. The `draw_boxes()` function clamps coordinates to image boundaries to handle AI model overshooting.
+</Warning>
+
+## Error Handling
+
+When vision analysis fails:
+
+1. Error is logged with provider name
+2. System returns fallback response:
+   - Empty detections array
+   - Neutral score of 75
+   - Confidence of 0.5
+   - Error message in `error` field
+
+```json
+{
+  "detections": [],
+  "cleanliness_score": 75,
+  "issues": [],
+  "confidence": 0.5,
+  "error": "Provider connection failed"
+}
+```
+
+This ensures the application remains functional even when AI services are unavailable.

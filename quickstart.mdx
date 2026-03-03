@@ -1,80 +1,425 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: 'Quick Start Guide'
+description: 'Get started with FlushLa in minutes - from registration to your first inspection'
 ---
 
-## Get started in three steps
+# Quick Start Guide
 
-Get your documentation site running locally and make your first customization.
+This guide will walk you through registering, scanning your first QR code, and performing a toilet inspection with FlushLa.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+- Email address for account creation
+- iPhone with Apple Wallet (for pass integration)
+- Camera access for QR scanning and photo capture
+
+## Steps
+
+<Steps>
+  <Step title="User Registration">
+    ### Create Your Account
+
+    Navigate to the registration page and provide your details. FlushLa will create both a Supabase authentication user and an Apple Wallet pass.
+
+    **Registration Form**:
+    ```html
+    <form id="registerForm">
+      <input type="text" id="name" placeholder="Full Name" required />
+      <input type="email" id="email" placeholder="email@example.com" required />
+      <button type="submit">Create Account</button>
+    </form>
+    ```
+
+    **Backend Process** (from `app/main.py:1056`):
+    ```python
+    # Create Supabase Auth user
+    auth_user = supabase_admin.auth.admin.create_user({
+        "email": payload.emailRecipient,
+        "password": "1234",
+        "email_confirm": True
+    })
+
+    # Insert into public.users table
+    supabase_admin.table("users").insert({
+        "id": user_id,
+        "username": payload.firstname,
+        "email": payload.emailRecipient,
+        "score": 41,  # Starting score
+        "is_admin": False
+    }).execute()
+
+    # Create Apple Wallet pass via PassCreator API
+    response = requests.post(
+        "https://app.passcreator.com/api/v3/pass",
+        headers=headers,
+        json={
+            "data": {
+                "templateId": payload.templateId,
+                "emailRecipient": payload.emailRecipient,
+                "firstname": payload.firstname
+            }
+        }
+    )
+
+    # Store pass identifier
+    supabase_admin.table("passes").insert({
+        "user_id": user_id,
+        "pass_identifier": pass_id
+    }).execute()
+    ```
+
+    <Note>
+      Check your email for the Apple Wallet pass. Add it to your wallet by tapping the link.
+    </Note>
+  </Step>
+
+  <Step title="QR Code Authentication">
+    ### Scan Your Pass
+
+    At a facility entrance, open the QR scanner page. The system uses `html5-qrcode` library to scan your Apple Wallet pass.
+
+    **Scanner Implementation** (from `app/templates/qr_access_scanner.html:352`):
+    ```javascript
+    const scanner = new Html5Qrcode("reader");
+
+    scanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      async (decodedText) => {
+        scanner.pause();
+        
+        // Verify access with backend
+        const res = await fetch("/api/verify-access", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            qr_code_data: decodedText.trim(), 
+            toilet_id: 1 
+          })
+        });
+
+        const data = await res.json();
+        
+        if (data.access === "granted") {
+          // Show user info and inspection interface
+          showUserInfo(data.user);
+        }
+      }
+    );
+    ```
+
+    **Backend Verification** (from `app/main.py:911`):
+    ```python
+    @app.post("/api/verify-access")
+    def verify_access(
+        request: Request,
+        qr_code_data: str = Body(...),
+        toilet_id: int = Body(default=1)
+    ):
+        # Look up pass by QR code value
+        res = supabase.table("passes").select("*, users(*)")
+            .eq("pass_identifier", qr_code_data).execute()
+        
+        user_data = res.data[0].get("users")
+        
+        # Calculate user's tier based on score
+        user_score = user_data.get("score", 0)
+        user_tier = get_user_tier(user_score)  # 1=Bronze, 2=Silver, 3=Gold
+        
+        # Check toilet tier requirements
+        toilet_data = supabase.table("toilets")
+            .select("*").eq("id", toilet_id).single().execute().data
+        toilet_tier = toilet_data.get("current_tier", 1)
+        
+        # Verify tier access
+        if user_tier < toilet_tier:
+            return {
+                "access": "denied",
+                "reason": f"Insufficient tier. You need {toilet_tier - user_tier} more tier level(s).",
+                "user_tier": user_tier,
+                "required_tier": toilet_tier
+            }
+        
+        # Grant access and set session
+        request.session["user_id"] = user_data["id"]
+        return {"access": "granted", "user": user_data}
+    ```
+
+    <Warning>
+      If your tier is insufficient for a facility, you'll see exactly how many points you need to gain access.
+    </Warning>
+  </Step>
+
+  <Step title="Start Inspection">
+    ### Capture Toilet Photo
+
+    After authentication, click "Start Toilet Inspection" to trigger the camera and begin analysis.
+
+    **Frontend Workflow** (from `app/templates/qr_access_scanner.html:435`):
+    ```javascript
+    async function startToiletInspection() {
+      // Create workflow session
+      const response = await fetch("/api/start-toilet-inspection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          toilet_id: 1
+        })
+      });
+
+      const data = await response.json();
+      currentSessionId = data.session_id;
+      
+      // Poll for inspection status
+      pollInspectionStatus();
+    }
+
+    async function pollInspectionStatus() {
+      const response = await fetch(`/api/workflow-status/${currentSessionId}`);
+      const data = await response.json();
+
+      switch (data.status) {
+        case "analyzing":
+          setInspectionStatus("AI analyzing image...", "fa-brain");
+          setTimeout(pollInspectionStatus, 2000);
+          break;
+        case "completed":
+          showResults(data.analysis_result);
+          break;
+      }
+    }
+    ```
+
+    **Backend Orchestration** (from `app/main.py:358`):
+    ```python
+    @app.post("/api/start-toilet-inspection")
+    async def start_toilet_inspection(request: StartInspectionRequest):
+        # Create workflow session
+        session = WorkflowSession(
+            user_id=request.user_id, 
+            toilet_id=request.toilet_id
+        )
+        workflow_sessions[session.session_id] = session
+        
+        # Send session ID to camera clients via WebSocket
+        for ws in connected_clients:
+            await ws.send_text(f"SESSION:{session.session_id}")
+        
+        # Trigger camera capture
+        for ws in connected_clients:
+            await ws.send_text("CAPTURE")
+        
+        return {
+            "status": "inspection_started",
+            "session_id": session.session_id
+        }
+    ```
+  </Step>
+
+  <Step title="AI Analysis">
+    ### Understanding the Vision System
+
+    FlushLa supports three AI vision providers. The analysis detects issues and calculates cleanliness scores.
+
+    **Vision Analysis** (from `app/vision.py:242`):
+    ```python
+    def analyze_toilet_image(image_bytes: bytes) -> dict:
+        """Route to configured AI provider"""
+        try:
+            if VISION_PROVIDER == "openai":
+                return analyze_with_openai(image_bytes)
+            elif VISION_PROVIDER == "vertex_ai":
+                return analyze_with_vertex_ai(image_bytes)
+            elif VISION_PROVIDER == "cloud_vision":
+                return analyze_with_cloud_vision(image_bytes)
+        except Exception as e:
+            # Fallback to default score
+            return {
+                "detections": [],
+                "cleanliness_score": 75,
+                "issues": [],
+                "confidence": 0.5
+            }
+    ```
+
+    **OpenAI GPT-4 Vision** (from `app/vision.py:116`):
+    ```python
+    def analyze_with_openai(image_bytes: bytes) -> dict:
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Analyze toilet cleanliness."},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_base64}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            temperature=0,
+            max_tokens=1000
+        )
+
+        return json_safe_parse(response.choices[0].message.content)
+    ```
+
+    **Scoring System** (from `app/vision.py:46-101`):
+    ```python
+    SYSTEM_PROMPT = """
+    Start from a base score of 100.
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    Subtract points as follows:
+    - feces_stain: −35 points each
+    - pee_stain: −20 points each
+    - wet_seat: −10 points each
+    - water_puddle: −10 points each
+    - toilet_paper_floor: −5 points each
+    - trash_on_floor: −5 points each
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    Return JSON with:
+    - detections: [{bbox: [x1,y1,x2,y2], issue: string, confidence: float}]
+    - cleanliness_score: 0-100
+    - issues: [unique issue types]
+    - confidence: average confidence
+    """
+    ```
 
-### Step 2: Deploy your changes
+    <Tabs>
+      <Tab title="OpenAI GPT-4">
+        Uses GPT-4 with vision capabilities for natural language understanding of toilet conditions.
+        
+        **Provider**: `VISION_PROVIDER=openai`
+        
+        **Model**: `gpt-4o`
+      </Tab>
+      <Tab title="Google Cloud Vision">
+        Uses object localization and label detection for basic issue identification.
+        
+        **Provider**: `VISION_PROVIDER=cloud_vision`
+        
+        **Limitations**: Simplified detection compared to Gemini
+      </Tab>
+      <Tab title="Vertex AI Gemini">
+        Uses Google's Gemini Pro Vision for advanced multimodal analysis.
+        
+        **Provider**: `VISION_PROVIDER=vertex_ai`
+        
+        **Model**: `gemini-2.5-flash`
+      </Tab>
+    </Tabs>
+  </Step>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+  <Step title="Receive Results & Points">
+    ### Score Calculation
+
+    After analysis, your personal score is updated based on the toilet's cleanliness.
+
+    **Score Delta Calculation** (from `app/main.py:228`):
+    ```python
+    def calculate_score_delta(cleanliness_score: int) -> int:
+        """Calculate score delta based on cleanliness score"""
+        if cleanliness_score >= 90:
+            return 5  # Bonus for very clean
+        elif cleanliness_score >= 70:
+            return 0  # Neutral
+        elif cleanliness_score >= 50:
+            return -5  # Small penalty
+        elif cleanliness_score >= 30:
+            return -10  # Medium penalty
+        else:
+            return -15  # Large penalty for very dirty
+    ```
+
+    **User Score Update** (from `app/main.py:274`):
+    ```python
+    def update_user_score(user_id: str):
+        # Get latest visit score delta
+        res = supabase.table("toilet_visits")
+            .select("score_delta")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(1).single().execute()
+        
+        score_delta = res.data.get("score_delta", 0)
+        
+        # Update user's total score (clamped 0-100)
+        current_score = user_data.get("score", 0)
+        new_score = max(0, min(100, current_score + score_delta))
+        
+        supabase.table("users")
+            .update({"score": int(new_score)})
+            .eq("id", user_id).execute()
+        
+        # Update Apple Wallet pass with new score
+        update_wallet_pass(user_id, new_score)
+    ```
+
+    **Wallet Update** (from `app/main.py:297-334`):
+    ```python
+    # Update pass via PassCreator API
+    url = f"https://app.passcreator.com/api/v3/pass/{identifier}"
+    payload = {"data": {"storedValue": int(new_score)}}
+    response = requests.patch(url, headers=headers, json=payload)
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    # Send push notification
+    url = f"https://app.passcreator.com/api/pass/{identifier}/sendpushnotification"
+    payload = {
+        "pushNotificationText": f"Your toilet cleanliness score has been updated to {new_score}."
+    }
+    requests.post(url, headers=headers, json=payload)
+    ```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    <Note>
+      Your Apple Wallet pass updates in real-time with push notifications showing your new score!
+    </Note>
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Tier Progression">
+    ### Understanding Tiers
 
-### Step 3: Go live
+    Your accumulated score determines your tier level and facility access.
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    **Tier Calculation** (from `app/main.py:241`):
+    ```python
+    def get_user_tier(score: int) -> int:
+        """Calculate user tier based on score
+        Returns: 1 (Bronze), 2 (Silver), or 3 (Gold)
+        """
+        if score >= 80:
+            return 3  # Gold
+        elif score >= 50:
+            return 2  # Silver
+        else:
+            return 1  # Bronze
+    ```
 
-## Next steps
+    **Tier Names**:
+    - **Tier 1 (Bronze Standard)**: 0-49 points - Basic access
+    - **Tier 2 (Silver Standard)**: 50-79 points - Standard facilities
+    - **Tier 3 (Gold Standard)**: 80-100 points - Premium facilities
 
-Now that you have your docs running, explore these key features:
+    <Card title="View Scoring Rubric" icon="book" href="/vision/scoring-rubric">
+      Learn detailed scoring rules, penalties, and tier benefits
+    </Card>
+  </Step>
+</Steps>
+
+## Next Steps
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Explore Features" icon="compass" href="/features">
+    Discover all capabilities including maps, admin dashboards, and analytics
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Learn about REST endpoints and WebSocket connections
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

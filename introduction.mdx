@@ -1,0 +1,129 @@
+---
+title: 'Introduction to FlushLa'
+description: 'AI-powered toilet cleanliness monitoring system with gamification and Apple Wallet integration'
+---
+
+# Welcome to FlushLa
+
+FlushLa is an AI-powered toilet cleanliness monitoring system that combines computer vision, gamification, and mobile technology to maintain high hygiene standards in public facilities.
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.png"
+  alt="FlushLa Hero Light"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.png"
+  alt="FlushLa Hero Dark"
+/>
+
+## What is FlushLa?
+
+FlushLla transforms toilet cleanliness monitoring into an engaging, automated experience. Using advanced AI vision analysis, the system detects hygiene issues, scores facilities, and rewards users for maintaining clean environments.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card
+    title="AI Vision Analysis"
+    icon="brain"
+    href="/features#ai-vision-analysis"
+  >
+    Powered by OpenAI GPT-4, Google Cloud Vision, and Vertex AI Gemini to detect cleanliness issues with 95% accuracy.
+  </Card>
+  <Card
+    title="Gamification System"
+    icon="trophy"
+    href="/features#gamification-system"
+  >
+    Earn points and tier up through Bronze, Silver, and Gold standards. Track your reputation and compete on leaderboards.
+  </Card>
+  <Card
+    title="Apple Wallet Integration"
+    icon="wallet"
+    href="/features#apple-wallet-integration"
+  >
+    Dynamic passes with real-time score updates and push notifications. Scan QR codes for instant facility access.
+  </Card>
+  <Card
+    title="QR Scanner Access"
+    icon="qrcode"
+    href="/features#qr-scanner"
+  >
+    Seamless authentication and inspection workflow. Scan your pass, capture toilet photos, and get instant AI analysis.
+  </Card>
+  <Card
+    title="Nearby Toilets Map"
+    icon="map-location-dot"
+    href="/features#nearby-toilets-map"
+  >
+    Find and view cleanliness scores for all facilities. Make informed decisions about which toilets to use.
+  </Card>
+  <Card
+    title="Real-time Camera Capture"
+    icon="camera"
+    href="/features#real-time-camera-capture"
+  >
+    WebSocket-powered live camera feed for instant photo capture and analysis.
+  </Card>
+</CardGroup>
+
+## How It Works
+
+<Steps>
+  <Step title="User Registration">
+    Create your account and receive an Apple Wallet pass via email. Your pass contains a unique QR code for authentication.
+  </Step>
+  <Step title="Scan QR Code">
+    At a facility entrance, scan your Apple Wallet pass QR code to authenticate and verify your tier access level.
+  </Step>
+  <Step title="Capture Inspection">
+    Take a photo of the toilet using the real-time camera interface. The system triggers WebSocket-based capture.
+  </Step>
+  <Step title="AI Analysis">
+    The image is analyzed by AI vision models (GPT-4, Cloud Vision, or Gemini) to detect hygiene issues like wet seats, stains, trash, and puddles.
+  </Step>
+  <Step title="Receive Score">
+    Get instant cleanliness scores (0-100) with annotated images showing detected issues. Your personal points update based on the result.
+  </Step>
+  <Step title="Tier Progression">
+    Accumulate points to advance through tiers and unlock access to premium facilities.
+  </Step>
+</Steps>
+
+## Technical Stack
+
+- **Backend**: FastAPI (Python) with async WebSocket support
+- **AI Vision**: OpenAI GPT-4, Google Cloud Vision, Vertex AI Gemini
+- **Database**: Supabase (PostgreSQL with Row Level Security)
+- **Authentication**: Supabase Auth with session management
+- **Storage**: Supabase Storage for annotated inspection images
+- **Apple Wallet**: PassCreator API for dynamic pass generation
+- **Real-time**: WebSocket connections for camera control
+- **Image Processing**: OpenCV for bounding box annotations
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Facilities Management" icon="building">
+    Monitor cleanliness across multiple locations. Identify problem areas and track maintenance effectiveness.
+  </Card>
+  <Card title="User Accountability" icon="user-shield">
+    Incentivize clean behavior through gamification. Users maintain high scores to access premium facilities.
+  </Card>
+  <Card title="Data Analytics" icon="chart-line">
+    Analyze cleanliness trends over time. Generate reports on facility performance and user behavior.
+  </Card>
+  <Card title="Access Control" icon="lock">
+    Tier-based access ensures only responsible users can access premium facilities.
+  </Card>
+</CardGroup>
+
+## Getting Started
+
+Ready to dive in? Check out our [Quick Start Guide](/quickstart) to set up your first inspection, or explore the [Features](/features) page to learn about all capabilities.
+
+<Card title="Quick Start" icon="rocket" href="/quickstart">
+  Get up and running with FlushLa in under 5 minutes
+</Card>

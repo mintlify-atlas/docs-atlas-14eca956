@@ -1,0 +1,351 @@
+---
+title: Vision Providers
+description: Configure and use different AI vision providers for toilet analysis
+---
+
+FlushLa supports three vision AI providers. Each has different capabilities, costs, and setup requirements.
+
+## Provider Configuration
+
+Set the provider using the `VISION_PROVIDER` environment variable:
+
+```bash
+# Choose one:
+VISION_PROVIDER=openai
+VISION_PROVIDER=vertex_ai
+VISION_PROVIDER=cloud_vision
+```
+
+**Default**: `cloud_vision`
+
+<Note>
+The system automatically detects if required packages are installed and falls back gracefully if a provider is unavailable.
+</Note>
+
+## Provider Comparison
+
+<Tabs>
+  <Tab title="OpenAI GPT-4 Vision">
+    ### OpenAI GPT-4 Vision
+
+    Best for: **Accurate issue detection with detailed reasoning**
+
+    #### Setup
+
+    ```bash
+    # Install package
+    pip install openai
+
+    # Configure
+    VISION_PROVIDER=openai
+    OPENAI_API_KEY=sk-...
+    ```
+
+    #### Implementation
+
+    ```python
+    def analyze_with_openai(image_bytes: bytes) -> dict:
+        """Analyze image using OpenAI GPT-4 Vision"""
+        if not OPENAI_AVAILABLE:
+            raise ValueError("OpenAI not available. Install openai package.")
+        
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Analyze toilet cleanliness."},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
+                        }
+                    ]
+                }
+            ],
+            temperature=0,
+            max_tokens=1000
+        )
+
+        return json_safe_parse(response.choices[0].message.content)
+    ```
+
+    **Location**: `app/vision.py:116`
+
+    #### Features
+
+    - Uses `gpt-4o` model (GPT-4 Omni)
+    - Temperature set to 0 for consistent results
+    - Base64 image encoding
+    - System prompt for structured output
+    - JSON parsing with fallback extraction
+
+    #### Pros/Cons
+
+    **Pros**:
+    - High accuracy for complex scenes
+    - Excellent at following structured prompts
+    - Good bounding box precision
+
+    **Cons**:
+    - Higher cost per request
+    - Requires external API key
+    - Rate limits on free tier
+
+  </Tab>
+  
+  <Tab title="Vertex AI Gemini">
+    ### Google Vertex AI Gemini
+
+    Best for: **Google Cloud users with existing GCP projects**
+
+    #### Setup
+
+    ```bash
+    # Install package
+    pip install google-cloud-aiplatform
+
+    # Configure
+    VISION_PROVIDER=vertex_ai
+    GOOGLE_PROJECT_ID=your-project-id
+    GOOGLE_LOCATION=ap-southeast1  # Optional, defaults to ap-southeast1
+    ```
+
+    #### Implementation
+
+    ```python
+    def analyze_with_vertex_ai(image_bytes: bytes) -> dict:
+        """Analyze image using Google Vertex AI Gemini Pro Vision"""
+        if not VERTEX_AI_AVAILABLE:
+            raise ValueError("Vertex AI not available. Install google-cloud-aiplatform package.")
+        
+        # Create image part
+        image_part = Part.from_data(image_bytes, mime_type="image/jpeg")
+        
+        # Create prompt
+        prompt = f"{SYSTEM_PROMPT}\n\nAnalyze toilet cleanliness in this image."
+        
+        # Generate response
+        response = vertex_model.generate_content([prompt, image_part])
+        
+        return json_safe_parse(response.text)
+    ```
+
+    **Location**: `app/vision.py:145`
+
+    #### Initialization
+
+    ```python
+    # From vision.py:40-42
+    vertexai.init(project=GOOGLE_PROJECT_ID, location=GOOGLE_LOCATION)
+    vertex_model = GenerativeModel("gemini-2.5-flash")
+    ```
+
+    #### Features
+
+    - Uses `gemini-2.5-flash` model (latest Flash variant)
+    - Direct binary image input (no base64 needed)
+    - Multi-part content support
+    - Regional deployment (default: `ap-southeast1`)
+
+    #### Pros/Cons
+
+    **Pros**:
+    - Cost-effective for high volume
+    - Fast inference with Flash model
+    - Native GCP integration
+    - No rate limits for enterprise accounts
+
+    **Cons**:
+    - Requires GCP project setup
+    - Need to configure IAM permissions
+    - Regional availability varies
+
+  </Tab>
+  
+  <Tab title="Cloud Vision">
+    ### Google Cloud Vision API
+
+    Best for: **Basic object detection without complex reasoning**
+
+    #### Setup
+
+    ```bash
+    # Install package
+    pip install google-cloud-vision
+
+    # Configure
+    VISION_PROVIDER=cloud_vision
+    GOOGLE_PROJECT_ID=your-project-id
+    ```
+
+    #### Implementation
+
+    ```python
+    def analyze_with_cloud_vision(image_bytes: bytes) -> dict:
+        """Analyze image using Google Cloud Vision API (basic object detection)"""
+        if not CLOUD_VISION_AVAILABLE:
+            raise ValueError("Cloud Vision not available. Install google-cloud-vision package.")
+        
+        # This is a simplified implementation using Cloud Vision's object detection
+        # For complex analysis like toilet cleanliness, Vertex AI Gemini is recommended
+        
+        image = vision.Image(content=image_bytes)
+        
+        # Perform object detection
+        objects = vision_client.object_localization(image=image).localized_object_annotations
+        
+        # Perform label detection for general cleanliness assessment
+        labels = vision_client.label_detection(image=image).label_annotations
+        
+        # Convert Cloud Vision results to our format
+        detections = []
+        issues = []
+        
+        # Map Cloud Vision objects to our toilet issues (simplified)
+        issue_mapping = {
+            "toilet": "clean_toilet",
+            "paper": "toilet_paper_floor", 
+            "liquid": "water_puddle",
+            "waste": "trash_on_floor"
+        }
+        
+        for obj in objects:
+            for issue_key, issue_type in issue_mapping.items():
+                if issue_key.lower() in obj.name.lower():
+                    bbox = obj.bounding_poly.normalized_vertices
+                    # Convert normalized coordinates to pixel coordinates (assuming 640x480)
+                    x1 = int(bbox[0].x * 640)
+                    y1 = int(bbox[0].y * 480)
+                    x2 = int(bbox[2].x * 640)
+                    y2 = int(bbox[2].y * 480)
+                    
+                    detections.append({
+                        "bbox": [x1, y1, x2, y2],
+                        "issue": issue_type,
+                        "confidence": obj.score
+                    })
+                    issues.append(issue_type)
+        
+        # Calculate cleanliness score based on detected issues
+        base_score = 100
+        score_penalties = {
+            "feces_stain": 35,
+            "pee_stain": 20,
+            "wet_seat": 10,
+            "water_puddle": 10,
+            "toilet_paper_floor": 5,
+            "trash_on_floor": 5
+        }
+        
+        for detection in detections:
+            penalty = score_penalties.get(detection["issue"], 0)
+            base_score -= penalty
+        
+        cleanliness_score = max(0, min(100, base_score))
+        
+        # Calculate average confidence
+        avg_confidence = sum(d["confidence"] for d in detections) / len(detections) if detections else 1.0
+        
+        return {
+            "detections": detections,
+            "cleanliness_score": cleanliness_score,
+            "issues": list(set(issues)),
+            "confidence": avg_confidence
+        }
+    ```
+
+    **Location**: `app/vision.py:162`
+
+    #### Features
+
+    - Object localization with bounding boxes
+    - Label detection for context
+    - Simple keyword mapping to issue types
+    - Normalized coordinate conversion
+    - Manual score calculation
+
+    <Warning>
+    Cloud Vision uses basic object detection, not specialized toilet hygiene analysis. It requires manual mapping of generic objects to toilet-specific issues. **For production use, Vertex AI Gemini or OpenAI is recommended.**
+    </Warning>
+
+    #### Coordinate Conversion
+
+    Cloud Vision returns normalized coordinates (0-1). The implementation converts to pixels:
+
+    ```python
+    # Assumes 640x480 resolution
+    x1 = int(bbox[0].x * 640)
+    y1 = int(bbox[0].y * 480)
+    x2 = int(bbox[2].x * 640)
+    y2 = int(bbox[2].y * 480)
+    ```
+
+    #### Pros/Cons
+
+    **Pros**:
+    - Lower cost per request
+    - Fast response times
+    - No prompt engineering needed
+
+    **Cons**:
+    - Limited to generic object detection
+    - Cannot detect specific hygiene issues
+    - Requires manual issue mapping
+    - Less accurate for domain-specific tasks
+
+  </Tab>
+</Tabs>
+
+## Package Installation Check
+
+The system checks for provider availability at startup:
+
+```python
+# From vision.py:11-28
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
+try:
+    import vertexai
+    from vertexai.generative_models import GenerativeModel, Part
+    VERTEX_AI_AVAILABLE = True
+except ImportError:
+    VERTEX_AI_AVAILABLE = False
+
+try:
+    from google.cloud import vision
+    CLOUD_VISION_AVAILABLE = True
+except ImportError:
+    CLOUD_VISION_AVAILABLE = False
+```
+
+If a provider is selected but not available, the system raises a clear error message.
+
+## Choosing a Provider
+
+### Decision Matrix
+
+| Use Case | Recommended Provider | Reason |
+|----------|---------------------|--------|
+| Production accuracy | **OpenAI** or **Vertex AI** | Advanced reasoning for hygiene issues |
+| High volume, low cost | **Vertex AI** | Cost-effective with Gemini Flash |
+| Existing GCP infrastructure | **Vertex AI** | Native integration |
+| Quick prototyping | **Cloud Vision** | Simple setup, no prompt engineering |
+| No cloud dependencies | **OpenAI** | Just need API key |
+
+### Performance Considerations
+
+- **OpenAI**: ~2-4 seconds per image
+- **Vertex AI**: ~1-3 seconds per image (Flash model)
+- **Cloud Vision**: ~500ms-1s per image (fastest, but least accurate)
+
+<Note>
+For production deployments, **Vertex AI with Gemini 2.5 Flash** offers the best balance of accuracy, speed, and cost.
+</Note>

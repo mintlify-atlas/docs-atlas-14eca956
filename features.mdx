@@ -1,0 +1,723 @@
+---
+title: 'Features'
+description: 'Comprehensive guide to FlushLa features including AI vision, gamification, Apple Wallet, QR scanning, and more'
+---
+
+# Features
+
+FlushLa combines cutting-edge AI technology with gamification and mobile integration to create a comprehensive toilet cleanliness monitoring system.
+
+## AI Vision Analysis
+
+FlushLa uses state-of-the-art computer vision models to automatically detect hygiene issues in toilet photos.
+
+### Supported AI Providers
+
+<Tabs>
+  <Tab title="OpenAI GPT-4">
+    **GPT-4 with Vision** provides the most accurate and context-aware analysis.
+
+    **Configuration** (from `app/vision.py:38-39`):
+    ```python
+    VISION_PROVIDER = os.getenv("VISION_PROVIDER", "openai")
+    openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    ```
+
+    **Implementation** (from `app/vision.py:116-142`):
+    ```python
+    def analyze_with_openai(image_bytes: bytes) -> dict:
+        image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Analyze toilet cleanliness."},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{image_base64}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            temperature=0,
+            max_tokens=1000
+        )
+
+        return json_safe_parse(response.choices[0].message.content)
+    ```
+
+    **Advantages**:
+    - Natural language understanding
+    - High accuracy on complex scenes
+    - Contextual reasoning
+  </Tab>
+
+  <Tab title="Vertex AI Gemini">
+    **Google Gemini Pro Vision** offers advanced multimodal capabilities.
+
+    **Configuration** (from `app/vision.py:40-42`):
+    ```python
+    vertexai.init(project=GOOGLE_PROJECT_ID, location=GOOGLE_LOCATION)
+    vertex_model = GenerativeModel("gemini-2.5-flash")
+    ```
+
+    **Implementation** (from `app/vision.py:145-159`):
+    ```python
+    def analyze_with_vertex_ai(image_bytes: bytes) -> dict:
+        # Create image part
+        image_part = Part.from_data(image_bytes, mime_type="image/jpeg")
+        
+        # Create prompt
+        prompt = f"{SYSTEM_PROMPT}\n\nAnalyze toilet cleanliness in this image."
+        
+        # Generate response
+        response = vertex_model.generate_content([prompt, image_part])
+        
+        return json_safe_parse(response.text)
+    ```
+
+    **Advantages**:
+    - Fast processing
+    - Cost-effective
+    - Integrated with Google Cloud
+  </Tab>
+
+  <Tab title="Cloud Vision API">
+    **Google Cloud Vision** provides basic object detection.
+
+    **Configuration** (from `app/vision.py:44`):
+    ```python
+    vision_client = vision.ImageAnnotatorClient()
+    ```
+
+    **Implementation** (from `app/vision.py:162-239`):
+    ```python
+    def analyze_with_cloud_vision(image_bytes: bytes) -> dict:
+        image = vision.Image(content=image_bytes)
+        
+        # Perform object detection
+        objects = vision_client.object_localization(image=image)
+            .localized_object_annotations
+        
+        # Perform label detection
+        labels = vision_client.label_detection(image=image)
+            .label_annotations
+        
+        # Map objects to toilet issues
+        issue_mapping = {
+            "toilet": "clean_toilet",
+            "paper": "toilet_paper_floor", 
+            "liquid": "water_puddle",
+            "waste": "trash_on_floor"
+        }
+        
+        detections = []
+        for obj in objects:
+            for issue_key, issue_type in issue_mapping.items():
+                if issue_key.lower() in obj.name.lower():
+                    bbox = obj.bounding_poly.normalized_vertices
+                    detections.append({
+                        "bbox": [x1, y1, x2, y2],
+                        "issue": issue_type,
+                        "confidence": obj.score
+                    })
+        
+        return {"detections": detections, "cleanliness_score": score}
+    ```
+
+    **Note**: Simplified detection compared to GPT-4 and Gemini.
+  </Tab>
+</Tabs>
+
+### Detection System
+
+The AI system detects six categories of hygiene issues:
+
+**Allowed Issues** (from `app/vision.py:65-70`):
+```python
+# Allowed issues:
+- wet_seat         # Water on toilet seat
+- pee_stain        # Urine stains
+- feces_stain      # Fecal matter
+- toilet_paper_floor  # Paper on floor
+- trash_on_floor   # Other debris
+- water_puddle     # Water on floor
+```
+
+**Scoring Rubric** (from `app/vision.py:74-85`):
+```python
+Start from a base score of 100.
+
+Subtract points as follows:
+- feces_stain: −35 points each
+- pee_stain: −20 points each
+- wet_seat: −10 points each
+- water_puddle: −10 points each
+- toilet_paper_floor: −5 points each
+- trash_on_floor: −5 points each
+
+Rules:
+- Multiple instances of the same issue stack.
+- Clamp the final score between 0 and 100.
+- If no issues are detected, score must be 100.
+```
+
+### Bounding Box Annotations
+
+Detected issues are highlighted with bounding boxes on the image.
+
+**Drawing Boxes** (from `app/vision.py:265-303`):
+```python
+def draw_boxes(image_bytes: bytes, detections: list) -> bytes:
+    """Draw bounding boxes on the image for detected issues"""
+    img = cv2.imdecode(
+        np.frombuffer(image_bytes, np.uint8),
+        cv2.IMREAD_COLOR
+    )
+
+    h, w = img.shape[:2]
+    for d in detections:
+        x1, y1, x2, y2 = d["bbox"]
+
+        # Clamp to image bounds
+        x1 = max(0, min(x1, w))
+        x2 = max(0, min(x2, w))
+        y1 = max(0, min(y1, h))
+        y2 = max(0, min(y2, h))
+        
+        label = f'{d["issue"]} {d.get("confidence", 0):.2f}'
+        
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+        cv2.putText(
+            img, label, (x1, max(15, y1 - 5)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1
+        )
+
+    _, encoded = cv2.imencode(".jpg", img)
+    return encoded.tobytes()
+```
+
+<Note>
+  Annotated images are automatically uploaded to Supabase Storage and accessible via public URLs.
+</Note>
+
+## Gamification System
+
+Users earn points and progress through tiers based on their contributions to cleanliness.
+
+### Score Delta System
+
+Your personal score changes based on toilet cleanliness at inspection time.
+
+**Calculation** (from `app/main.py:228-239`):
+```python
+def calculate_score_delta(cleanliness_score: int) -> int:
+    """Calculate score delta based on cleanliness score"""
+    if cleanliness_score >= 90:
+        return 5  # Bonus for very clean
+    elif cleanliness_score >= 70:
+        return 0  # Neutral
+    elif cleanliness_score >= 50:
+        return -5  # Small penalty
+    elif cleanliness_score >= 30:
+        return -10  # Medium penalty
+    else:
+        return -15  # Large penalty for very dirty
+```
+
+<Warning>
+  Inspecting very dirty toilets (score < 30) results in a -15 point penalty to your personal score.
+</Warning>
+
+### Tier System
+
+Tiers unlock access to different facility levels.
+
+**Tier Calculation** (from `app/main.py:241-259`):
+```python
+def get_user_tier(score: int) -> int:
+    """Calculate user tier based on score
+    Returns: 1 (Bronze), 2 (Silver), or 3 (Gold)
+    """
+    if score >= 80:
+        return 3  # Gold
+    elif score >= 50:
+        return 2  # Silver
+    else:
+        return 1  # Bronze
+
+def get_tier_name(tier: int) -> str:
+    """Get tier name from tier number"""
+    tier_names = {
+        1: "Bronze Standard",
+        2: "Silver Standard",
+        3: "Gold Standard"
+    }
+    return tier_names.get(tier, "Unknown")
+```
+
+| Tier | Score Range | Name | Benefits |
+|------|-------------|------|----------|
+| 1 | 0-49 | Bronze Standard | Basic facility access |
+| 2 | 50-79 | Silver Standard | Standard facilities, basic rewards |
+| 3 | 80-100 | Gold Standard | Premium facilities, leaderboard recognition |
+
+### Access Control
+
+Tier-based access prevents users with low scores from accessing premium facilities.
+
+**Verification** (from `app/main.py:958-972`):
+```python
+# Calculate user's tier based on their score
+user_score = user_data.get("score", 0)
+user_tier = get_user_tier(user_score)
+
+# Get toilet tier requirement
+toilet_tier = toilet_data.get("current_tier", 1)
+
+# Check if user has sufficient tier
+if user_tier < toilet_tier:
+    return {
+        "access": "denied",
+        "reason": f"Insufficient tier. This is a {get_tier_name(toilet_tier)} toilet. You need {toilet_tier - user_tier} more tier level(s).",
+        "user_tier": user_tier,
+        "required_tier": toilet_tier,
+        "points_needed": (50 if toilet_tier == 2 else 80) - user_score
+    }
+```
+
+## Apple Wallet Integration
+
+FlushLa integrates with Apple Wallet via the PassCreator API for seamless mobile access.
+
+### Pass Creation
+
+When users register, an Apple Wallet pass is automatically generated and emailed.
+
+**Registration Flow** (from `app/main.py:1094-1132`):
+```python
+# Call PassCreator API
+PASSKEYAPI = os.getenv("PASSKEYAPI")
+headers = {
+    "Authorization": PASSKEYAPI,
+    "Content-Type": "application/json"
+}
+
+api_payload = {
+    "data": {
+        "templateId": payload.templateId,
+        "emailRecipient": payload.emailRecipient,
+        "firstname": payload.firstname
+    }
+}
+
+response = requests.post(
+    "https://app.passcreator.com/api/v3/pass",
+    headers=headers,
+    json=api_payload
+)
+
+# Extract pass ID from response
+pass_id = response.json()["data"]["barcodeValue"]
+
+# Store pass identifier in database
+supabase_admin.table("passes").insert({
+    "user_id": user_id,
+    "pass_identifier": pass_id
+}).execute()
+```
+
+### Dynamic Pass Updates
+
+Passes update in real-time when user scores change.
+
+**Score Update** (from `app/main.py:296-334`):
+```python
+def update_user_score(user_id: str):
+    # ... calculate new score ...
+    
+    # Get pass identifier
+    identifier = supabase.table("passes")
+        .select("pass_identifier")
+        .eq("user_id", user_id)
+        .single().execute().data.get("pass_identifier")
+    
+    # Update pass via PassCreator API
+    url = f"https://app.passcreator.com/api/v3/pass/{identifier}"
+    payload = {"data": {"storedValue": int(new_cleanliness_score)}}
+    response = requests.patch(url, headers=headers, json=payload)
+    
+    # Send push notification to user
+    url = f"https://app.passcreator.com/api/pass/{identifier}/sendpushnotification"
+    payload = {
+        "pushNotificationText": f"Your toilet cleanliness score has been updated to {new_cleanliness_score}."
+    }
+    response = requests.post(url, headers=headers, json=payload)
+```
+
+<Note>
+  Users receive instant push notifications on their iPhone when their score changes.
+</Note>
+
+## QR Scanner
+
+The QR scanner enables quick authentication and inspection workflows.
+
+### Scanner Implementation
+
+Built with the `html5-qrcode` library for cross-browser camera access.
+
+**Frontend** (from `app/templates/qr_access_scanner.html:352-432`):
+```javascript
+const scanner = new Html5Qrcode("reader");
+
+scanner.start(
+  { facingMode: "environment" },  // Use rear camera
+  { fps: 10, qrbox: { width: 250, height: 250 } },
+  async (decodedText) => {
+    scanner.pause();
+    
+    // Verify access with backend
+    const res = await fetch("/api/verify-access", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        qr_code_data: decodedText.trim(), 
+        toilet_id: 1 
+      })
+    });
+
+    const data = await res.json();
+    
+    if (data.access === "granted") {
+      // Show user info and enable inspection
+      showUserInfo(data.user);
+    } else {
+      // Show denial reason and tier requirements
+      showAccessDenied(data);
+    }
+  }
+);
+```
+
+### Workflow Session Management
+
+Each inspection creates a workflow session to track progress.
+
+**Session Class** (from `app/main.py:37-54`):
+```python
+class WorkflowSession:
+    def __init__(self, user_id: str, toilet_id: int = 1):
+        self.session_id = str(uuid.uuid4())
+        self.user_id = user_id
+        self.toilet_id = toilet_id
+        self.status = "waiting_for_capture"
+        self.image_data = None
+        self.analysis_result = None
+        self.created_at = datetime.now()
+        
+    def to_dict(self):
+        return {
+            "session_id": self.session_id,
+            "user_id": self.user_id,
+            "toilet_id": self.toilet_id,
+            "status": self.status,
+            "created_at": self.created_at.isoformat()
+        }
+```
+
+**Status Polling** (from `app/templates/qr_access_scanner.html:477-528`):
+```javascript
+async function pollInspectionStatus() {
+  const response = await fetch(`/api/workflow-status/${currentSessionId}`);
+  const data = await response.json();
+
+  switch (data.status) {
+    case "waiting_for_capture":
+      setInspectionStatus("Waiting for photo...");
+      setTimeout(pollInspectionStatus, 2000);
+      break;
+    
+    case "analyzing":
+      setInspectionStatus("AI analyzing image...");
+      setTimeout(pollInspectionStatus, 2000);
+      break;
+    
+    case "completed":
+      showResults(data.analysis_result);
+      break;
+  }
+}
+```
+
+## Nearby Toilets Map
+
+Find and compare cleanliness scores across all facilities.
+
+**Backend Route** (from `app/main.py:591-625`):
+```python
+@app.get("/nearby-toilets")
+def nearby_toilets(request: Request):
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    
+    # Fetch all toilets with their latest cleanliness scores
+    toilets_res = supabase.table("toilets")
+        .select("*")
+        .order("name")
+        .execute()
+    toilets = toilets_res.data or []
+    
+    # For each toilet, get the latest inspection
+    for toilet in toilets:
+        latest_visit_res = (
+            supabase.table("toilet_visits")
+            .select("cleanliness_score, created_at, image_url")
+            .eq("toilet_id", toilet["id"])
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        
+        if latest_visit_res.data:
+            toilet["latest_inspection"] = latest_visit_res.data[0]
+        else:
+            toilet["latest_inspection"] = None
+    
+    return templates.TemplateResponse(
+        "user/nearby_toilets.html",
+        {"request": request, "user": user, "toilets": toilets}
+    )
+```
+
+## Real-time Camera Capture
+
+WebSocket-powered camera control for instant photo capture.
+
+### WebSocket Connection
+
+**Backend** (from `app/main.py:56-64`):
+```python
+connected_clients = []
+
+@app.websocket("/ws/camera")
+async def camera_ws(ws: WebSocket):
+    await ws.accept()
+    connected_clients.append(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except:
+        connected_clients.remove(ws)
+```
+
+### Capture Trigger
+
+**Trigger Endpoint** (from `app/main.py:70-78`):
+```python
+@app.post("/take-picture")
+async def take_picture(session_id: str = None):
+    # Update workflow session status
+    if session_id and session_id in workflow_sessions:
+        workflow_sessions[session_id].status = "capture_triggered"
+    
+    # Send capture command to all connected cameras
+    for ws in connected_clients:
+        await ws.send_text("CAPTURE")
+    
+    return {"status": "capture_triggered", "session_id": session_id}
+```
+
+### Photo Upload & Analysis
+
+**Upload Handler** (from `app/main.py:80-171`):
+```python
+@app.post("/upload-photo")
+async def upload_photo(image: UploadFile = File(...), session_id: str = Form(None)):
+    data = await image.read()
+    
+    # Get workflow session
+    session = workflow_sessions[session_id]
+    session.image_data = data
+    session.status = "analyzing"
+    
+    # Trigger AI analysis
+    analysis = analyze_toilet_image(data)
+    annotated_bytes = draw_boxes(data, analysis.get("detections", []))
+    
+    # Calculate score delta
+    cleanliness_score = analysis.get("cleanliness_score", 100)
+    score_delta = calculate_score_delta(cleanliness_score)
+    
+    # Upload annotated image to Supabase Storage
+    timestamp = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d_%H%M%S")
+    filename = f"toilet_inspection_{session.user_id}_{timestamp}.jpg"
+    image_url = await upload_image_to_supabase(annotated_bytes, filename)
+    
+    # Store visit record in database
+    supabase.table("toilet_visits").insert({
+        "user_id": session.user_id,
+        "toilet_id": session.toilet_id,
+        "ai_result": analysis,
+        "cleanliness_score": cleanliness_score,
+        "score_delta": score_delta,
+        "image_url": image_url,
+        "created_at": datetime.now(timezone(timedelta(hours=8))).isoformat()
+    }).execute()
+    
+    # Update user score
+    update_user_score(session.user_id)
+    
+    session.status = "completed"
+    return {"status": "analysis_completed", "analysis": analysis}
+```
+
+## Admin Dashboard
+
+Comprehensive analytics and monitoring for facility managers.
+
+**Dashboard Route** (from `app/main.py:640-830`):
+```python
+@app.get("/admin")
+def admin(request: Request):
+    user = get_current_user(request)
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Total counts
+    total_users = supabase.table("users").select("id", count="exact").execute().count
+    total_toilets = supabase.table("toilets").select("id", count="exact").execute().count
+    total_visits = supabase.table("toilet_visits").select("id", count="exact").execute().count
+
+    # Toilet tier breakdown
+    tier_counts_res = supabase.table("toilets").select("current_tier").execute()
+    tier_counts = {}
+    for t in tier_counts_res.data:
+        tier_counts[t["current_tier"]] = tier_counts.get(t["current_tier"], 0) + 1
+    
+    gold = tier_counts.get(3, 0)
+    silver = tier_counts.get(2, 0)
+    bronze = tier_counts.get(1, 0)
+
+    # Average cleanliness score
+    all_visits_res = supabase.table("toilet_visits").select("cleanliness_score").execute()
+    valid_scores = [v["cleanliness_score"] for v in all_visits_res.data 
+                    if v["cleanliness_score"] is not None]
+    avg_cleanliness = sum(valid_scores) / len(valid_scores) if valid_scores else 0
+
+    # Top performing toilets
+    # ... (aggregation logic)
+    
+    # Worst offenders and best performers
+    # ... (user statistics)
+    
+    return templates.TemplateResponse("admin/admin.html", {
+        "user": user,
+        "request": request,
+        "total_users": total_users,
+        "total_toilets": total_toilets,
+        "total_visits": total_visits,
+        "gold": gold,
+        "silver": silver,
+        "bronze": bronze,
+        "avg_cleanliness": round(avg_cleanliness, 1),
+        "top_toilets": top_toilets,
+        "offenders": offenders,
+        "best_performers": best_performers
+    })
+```
+
+<CardGroup cols={2}>
+  <Card title="Total Metrics" icon="chart-bar">
+    Track total users, toilets, visits, and average cleanliness scores across all facilities.
+  </Card>
+  <Card title="Tier Distribution" icon="layer-group">
+    View how many toilets are at Gold, Silver, and Bronze tiers.
+  </Card>
+  <Card title="Top Performers" icon="star">
+    See users with the highest positive contributions and best average cleanliness scores.
+  </Card>
+  <Card title="Flagged Incidents" icon="flag">
+    Monitor users with frequent negative scores and worst offenders.
+  </Card>
+</CardGroup>
+
+## Data Storage
+
+All inspection data is stored in Supabase with public image URLs.
+
+**Image Upload** (from `app/main.py:177-226`):
+```python
+async def upload_image_to_supabase(image_bytes: bytes, filename: str) -> str:
+    """Upload image to Supabase storage and return public URL"""
+    try:
+        # Use admin client to bypass RLS policies
+        result = supabase_admin.storage.from_("uploads").upload(
+            filename, 
+            image_bytes,
+            file_options={
+                "content-type": "image/jpeg",
+                "cache-control": "3600",
+                "upsert": "true"  # Overwrite if exists
+            }
+        )
+        
+        if result:
+            # Get the public URL
+            public_url = supabase_admin.storage.from_("uploads").get_public_url(filename)
+            return public_url
+        else:
+            raise Exception("Failed to upload image to storage")
+            
+    except Exception as e:
+        # Handle duplicate file errors
+        if "already exists" in str(e).lower():
+            supabase_admin.storage.from_("uploads").remove([filename])
+            # Retry upload
+            result = supabase_admin.storage.from_("uploads").upload(
+                filename, image_bytes,
+                file_options={"content-type": "image/jpeg"}
+            )
+            public_url = supabase_admin.storage.from_("uploads").get_public_url(filename)
+            return public_url
+        raise e
+```
+
+**Visit Record** (from `app/main.py:128-136`):
+```python
+supabase.table("toilet_visits").insert({
+    "user_id": session.user_id,
+    "toilet_id": session.toilet_id,
+    "ai_result": analysis,  # Full JSON analysis
+    "cleanliness_score": cleanliness_score,
+    "score_delta": score_delta,
+    "image_url": image_url,  # Public Supabase URL
+    "created_at": datetime.now(timezone(timedelta(hours=8))).isoformat()
+}).execute()
+```
+
+<Note>
+  All annotated inspection images are stored with public URLs for easy viewing and auditing.
+</Note>
+
+## Summary
+
+FlushLa combines:
+- **3 AI vision providers** (OpenAI, Vertex AI, Cloud Vision)
+- **6 detection categories** with pixel-level bounding boxes
+- **Dynamic scoring** (0-100) with tier progression
+- **Apple Wallet integration** with real-time updates
+- **QR-based authentication** and access control
+- **WebSocket camera control** for instant capture
+- **Comprehensive analytics** for facility management
+
+<Card title="Try FlushLa" icon="rocket" href="/quickstart">
+  Start your first toilet inspection in under 5 minutes
+</Card>

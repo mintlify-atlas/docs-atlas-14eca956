@@ -1,0 +1,163 @@
+---
+title: Authentication
+description: Session-based authentication system for FlushLa API
+---
+
+## Overview
+
+FlushLa uses **session-based authentication** powered by Starlette's `SessionMiddleware` and Supabase Auth.
+
+## Session Middleware
+
+The API uses `SessionMiddleware` to manage user sessions:
+
+```python
+app.add_middleware(SessionMiddleware, secret_key="motherwaterplant")
+```
+
+Session data is stored server-side and identified by a session cookie sent to the client.
+
+## Authentication Flow
+
+### 1. Register a New User
+
+Users can register via the `/api/create_passkey` endpoint, which:
+
+1. Creates a Supabase Auth user
+2. Inserts user profile into `public.users` table
+3. Generates a digital pass via PassCreator API
+4. Automatically logs in the user
+
+### 2. Login
+
+Users authenticate via `/api/login` with email and password:
+
+1. Validates credentials against Supabase Auth
+2. Fetches user profile from database
+3. Stores `user_id` in session
+4. Returns user information
+
+### 3. Session Validation
+
+The `get_current_user()` function validates active sessions:
+
+```python
+def get_current_user(request: Request):
+    user_id = request.session.get("user_id")
+    if not user_id:
+        return None
+    res = supabase.table("users").select("*").eq("id", user_id).single().execute()
+    return res.data if res.data else None
+```
+
+### 4. Logout
+
+The `/api/logout` endpoint:
+
+1. Clears the FastAPI session
+2. Signs out from Supabase Auth
+3. Redirects to the landing page
+
+## get_current_user Function
+
+**Location**: `app/main.py:261`
+
+### Usage
+
+```python
+from app.main import get_current_user
+
+@app.get("/protected-route")
+def protected_route(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    # User is authenticated
+    return {"user": user}
+```
+
+### Return Value
+
+<ResponseField name="id" type="string">
+  User's unique identifier (UUID)
+</ResponseField>
+
+<ResponseField name="username" type="string">
+  User's display name
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  User's email address
+</ResponseField>
+
+<ResponseField name="score" type="integer">
+  User's current cleanliness score (0-100)
+</ResponseField>
+
+<ResponseField name="is_admin" type="boolean">
+  Whether the user has admin privileges
+</ResponseField>
+
+## QR Code Authentication
+
+FlushLa also supports **QR code-based access** via the `/api/verify-access` endpoint.
+
+When a user scans their digital pass at a toilet:
+
+1. QR code data is sent to `/api/verify-access`
+2. System validates the pass and checks user tier
+3. If authorized, user is automatically logged in via session
+4. Access is granted or denied based on toilet tier requirements
+
+### Example
+
+```bash
+curl -X POST http://localhost:8000/api/verify-access \
+  -H "Content-Type: application/json" \
+  -d '{
+    "qr_code_data": "passkey_123456",
+    "toilet_id": 1
+  }'
+```
+
+### Response (Access Granted)
+
+```json
+{
+  "access": "granted",
+  "user": {
+    "id": "uuid-here",
+    "username": "john_doe",
+    "email": "john@example.com",
+    "score": 75,
+    "tier": 2,
+    "tier_name": "Silver Standard"
+  },
+  "toilet": {
+    "id": 1,
+    "name": "Plaza Shopping Mall - Level 2",
+    "tier": 2,
+    "tier_name": "Silver Standard"
+  }
+}
+```
+
+## Protected Routes
+
+Routes that require authentication should call `get_current_user()` and handle `None` returns:
+
+```python
+@app.get("/nearby-toilets")
+def nearby_toilets(request: Request):
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    # Continue with authenticated logic
+```
+
+## Security Considerations
+
+- Sessions use a secret key for signing cookies
+- Passwords are managed by Supabase Auth (hashed and salted)
+- Session data expires when the browser closes (unless configured otherwise)
+- QR code authentication automatically creates sessions for seamless access

@@ -1,0 +1,383 @@
+---
+title: Inspection Workflow
+description: Understanding FlushLa's complete toilet inspection process from camera capture to wallet sync
+---
+
+FlushLa's inspection workflow orchestrates the entire process of capturing, analyzing, and scoring toilet cleanliness. The system coordinates between camera capture, AI vision analysis, database storage, and mobile wallet updates.
+
+## WorkflowSession Class
+
+Each inspection creates a unique `WorkflowSession` object that tracks the entire process:
+
+```python
+class WorkflowSession:
+    def __init__(self, user_id: str, toilet_id: int = 1):
+        self.session_id = str(uuid.uuid4())  # Unique identifier
+        self.user_id = user_id               # User performing inspection
+        self.toilet_id = toilet_id           # Toilet being inspected
+        self.status = "waiting_for_capture"  # Current workflow state
+        self.image_data = None               # Captured image bytes
+        self.analysis_result = None          # AI analysis results
+        self.created_at = datetime.now()     # Session timestamp
+```
+
+### Workflow States
+
+The session progresses through these states:
+
+1. `waiting_for_capture` - Waiting for camera to take photo
+2. `capture_triggered` - Camera capture command sent
+3. `analyzing` - AI vision processing image
+4. `completed` - Analysis finished, results stored
+5. `error` - Something went wrong
+
+## Complete Workflow Diagram
+
+<Steps>
+  <Step title="Start Inspection">
+    User initiates inspection via `/api/start-toilet-inspection` endpoint
+    
+    ```json
+    POST /api/start-toilet-inspection
+    {
+      "user_id": "abc123",
+      "toilet_id": 1
+    }
+    ```
+    
+    System creates new `WorkflowSession` with unique ID
+  </Step>
+
+  <Step title="Trigger Camera">
+    Server sends commands to connected camera clients via WebSocket
+    
+    ```python
+    # Send session ID to camera
+    ws.send_text(f"SESSION:{session.session_id}")
+    
+    # Trigger camera capture
+    ws.send_text("CAPTURE")
+    ```
+    
+    Camera client receives commands and captures photo
+  </Step>
+
+  <Step title="Upload Image">
+    Camera uploads photo to `/upload-photo` with session ID
+    
+    ```python
+    # Store image in session
+    session.image_data = image_bytes
+    session.status = "analyzing"
+    ```
+  </Step>
+
+  <Step title="AI Vision Analysis">
+    System analyzes image using configured AI provider
+    
+    ```python
+    # Analyze toilet image
+    analysis = analyze_toilet_image(data)
+    # Returns: detections, cleanliness_score, issues, confidence
+    
+    # Draw bounding boxes on image
+    annotated_bytes = draw_boxes(data, analysis["detections"])
+    ```
+  </Step>
+
+  <Step title="Calculate Score Delta">
+    Convert cleanliness score to user score change
+    
+    ```python
+    cleanliness_score = analysis["cleanliness_score"]
+    score_delta = calculate_score_delta(cleanliness_score)
+    # Returns: +5, 0, -5, -10, or -15
+    ```
+  </Step>
+
+  <Step title="Upload Annotated Image">
+    Save annotated image to Supabase Storage
+    
+    ```python
+    filename = f"toilet_inspection_{user_id}_{timestamp}.jpg"
+    image_url = await upload_image_to_supabase(annotated_bytes, filename)
+    ```
+  </Step>
+
+  <Step title="Store Visit Record">
+    Save inspection data to database
+    
+    ```python
+    supabase.table("toilet_visits").insert({
+        "user_id": user_id,
+        "toilet_id": toilet_id,
+        "ai_result": analysis,
+        "cleanliness_score": cleanliness_score,
+        "score_delta": score_delta,
+        "image_url": image_url,
+        "created_at": timestamp
+    })
+    ```
+  </Step>
+
+  <Step title="Update User Score">
+    Apply score delta to user's total score
+    
+    ```python
+    def update_user_score(user_id):
+        # Get latest score delta
+        score_delta = get_latest_score_delta(user_id)
+        
+        # Update user score (clamped 0-100)
+        new_score = clamp(current_score + score_delta, 0, 100)
+        
+        # Save to database
+        supabase.table("users").update({"score": new_score})
+    ```
+  </Step>
+
+  <Step title="Sync Wallet">
+    Update mobile wallet pass with new score
+    
+    ```python
+    # Update wallet pass
+    patch_wallet_pass({
+        "storedValue": new_score
+    })
+    
+    # Send push notification
+    send_push_notification(
+        f"Your cleanliness score: {new_score}"
+    )
+    ```
+  </Step>
+
+  <Step title="Return Results">
+    Session status updated to `completed`, results returned
+    
+    ```json
+    {
+      "status": "analysis_completed",
+      "session_id": "uuid",
+      "cleanliness_score": 85,
+      "score_delta": 0,
+      "image_url": "https://...",
+      "analysis": { ... }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Camera Capture Process
+
+The camera system uses WebSocket connections for real-time communication:
+
+### WebSocket Connection
+
+```python
+@app.websocket("/ws/camera")
+async def camera_ws(ws: WebSocket):
+    await ws.accept()
+    connected_clients.append(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except:
+        connected_clients.remove(ws)
+```
+
+### Capture Flow
+
+1. **Camera connects**: Browser/device connects to `/ws/camera`
+2. **Server broadcasts**: When inspection starts, server sends `SESSION:xxx` and `CAPTURE` commands
+3. **Camera captures**: Client captures photo and uploads to `/upload-photo` with session_id
+4. **Server processes**: Upload triggers automatic analysis
+
+<Note>
+The system supports multiple connected cameras. Broadcast messages are sent to all connected clients.
+</Note>
+
+## Image Upload and Analysis
+
+The `/upload-photo` endpoint handles the complete analysis pipeline:
+
+```python
+@app.post("/upload-photo")
+async def upload_photo(image: UploadFile, session_id: str):
+    # Read image data
+    data = await image.read()
+    
+    # Verify session exists
+    if session_id not in workflow_sessions:
+        return {"error": "Session not found"}
+    
+    session = workflow_sessions[session_id]
+    session.image_data = data
+    session.status = "analyzing"
+    
+    # Analyze with AI
+    analysis = analyze_toilet_image(data)
+    
+    # Calculate score impact
+    cleanliness_score = analysis["cleanliness_score"]
+    score_delta = calculate_score_delta(cleanliness_score)
+    
+    # Create annotated image
+    annotated_bytes = draw_boxes(data, analysis["detections"])
+    
+    # Upload to storage
+    image_url = await upload_image_to_supabase(annotated_bytes, filename)
+    
+    # Store visit record
+    store_toilet_visit(...)
+    
+    # Update user score and wallet
+    update_user_score(session.user_id)
+    
+    # Update session
+    session.status = "completed"
+    session.analysis_result = {...}
+    
+    return analysis_result
+```
+
+## Score Updates and Wallet Sync
+
+The `update_user_score` function handles the complete scoring and wallet integration:
+
+```python
+def update_user_score(user_id: str):
+    # 1. Get latest score delta from most recent visit
+    latest_visit = get_latest_visit(user_id)
+    score_delta = latest_visit["score_delta"]
+    
+    # 2. Fetch current user score
+    current_score = get_user_score(user_id)
+    
+    # 3. Calculate new score (clamped 0-100)
+    new_score = max(0, min(100, current_score + score_delta))
+    
+    # 4. Update database
+    supabase.table("users").update({"score": new_score})
+    
+    # 5. Sync to mobile wallet
+    # - Get pass identifier
+    pass_identifier = get_user_pass(user_id)
+    
+    # - Update wallet pass
+    update_wallet_pass(pass_identifier, {
+        "storedValue": new_score
+    })
+    
+    # - Send push notification
+    send_push_notification(pass_identifier,
+        f"Your toilet cleanliness score has been updated to {new_score}."
+    )
+```
+
+### Wallet Sync Details
+
+<CodeGroup>
+
+```python Update Pass Score
+# Update stored value on wallet pass
+url = f"https://app.passcreator.com/api/v3/pass/{identifier}"
+payload = {
+    "data": {
+        "storedValue": int(new_cleanliness_score)
+    }
+}
+response = requests.patch(url, headers=headers, json=payload)
+```
+
+```python Send Notification
+# Send push notification to user's device
+url = f"https://app.passcreator.com/api/pass/{identifier}/sendpushnotification"
+payload = {
+    "pushNotificationText": f"Your toilet cleanliness score has been updated to {new_score}."
+}
+response = requests.post(url, headers=headers, json=payload)
+```
+
+</CodeGroup>
+
+## Workflow Monitoring
+
+Developers can monitor active workflows using debug endpoints:
+
+### Get All Sessions
+
+```bash
+GET /api/debug/workflow-sessions
+```
+
+```json
+{
+  "active_sessions": 3,
+  "connected_cameras": 2,
+  "sessions": {
+    "uuid-1": {
+      "session_id": "uuid-1",
+      "user_id": "user123",
+      "status": "completed",
+      "has_analysis_result": true
+    }
+  }
+}
+```
+
+### Get Single Session
+
+```bash
+GET /api/debug/session/{session_id}
+```
+
+```json
+{
+  "session_id": "uuid-1",
+  "user_id": "user123",
+  "toilet_id": 1,
+  "status": "completed",
+  "has_image_data": true,
+  "image_size": 245678,
+  "analysis_result": { ... }
+}
+```
+
+### Check Workflow Status
+
+```bash
+GET /api/workflow-status/{session_id}
+```
+
+Returns current state and results if completed.
+
+## Error Handling
+
+<Warning>
+If any step fails, the session status is set to `"error"` and the error is logged.
+</Warning>
+
+```python
+try:
+    analysis = analyze_toilet_image(data)
+    # ... process results
+except Exception as e:
+    session.status = "error"
+    session.analysis_result = {"error": str(e)}
+    raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+```
+
+## Cleanup
+
+Completed sessions can be cleaned up:
+
+```bash
+DELETE /api/workflow-session/{session_id}
+```
+
+This removes the session from memory after results have been retrieved.
+
+<Note>
+Workflow sessions are stored in memory (`workflow_sessions` dict). For production, consider using Redis or a database for session persistence across server restarts.
+</Note>
